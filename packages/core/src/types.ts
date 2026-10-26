@@ -4,10 +4,18 @@ export const CHANGE_SET_SCHEMA_VERSION = 1 as const;
 
 export type ChangeStatus = "pending" | "applied" | "failed";
 
+export interface SourceReference {
+  file: string;
+  line: number;
+  method?: "explicit" | "css-rule" | "source-map" | "utility-class";
+  confidence?: "exact";
+}
+
 export interface VisualChange {
   property: string;
   before: string;
   after: string;
+  source?: SourceReference;
 }
 
 export interface ChangeSet {
@@ -27,12 +35,7 @@ export interface ChangeSet {
   target: {
     selector: string;
     label: string;
-    source: {
-      file: string;
-      line: number;
-      method?: "explicit" | "css-rule" | "source-map" | "utility-class";
-      confidence?: "exact";
-    };
+    source: SourceReference;
   };
   changes: VisualChange[];
   result?: {
@@ -47,6 +50,13 @@ export type NewChangeSet = Omit<
   "schemaVersion" | "id" | "status" | "createdAt" | "conversationNotifiedAt" | "result"
 >;
 
+const sourceReferenceSchema = z.object({
+  file: z.string().min(1),
+  line: z.number().int().positive(),
+  method: z.enum(["explicit", "css-rule", "source-map", "utility-class"]).optional(),
+  confidence: z.literal("exact").optional()
+});
+
 export const newChangeSetSchema = z.object({
   sessionId: z.string().min(1),
   origin: z.enum(["embedded", "browser-overlay"]).optional(),
@@ -56,15 +66,10 @@ export const newChangeSetSchema = z.object({
   target: z.object({
     selector: z.string().min(1),
     label: z.string().min(1),
-    source: z.object({
-      file: z.string().min(1),
-      line: z.number().int().positive(),
-      method: z.enum(["explicit", "css-rule", "source-map", "utility-class"]).optional(),
-      confidence: z.literal("exact").optional()
-    })
+    source: sourceReferenceSchema
   }),
   changes: z.array(
-    z.object({ property: z.string().min(1), before: z.string(), after: z.string() })
+    z.object({ property: z.string().min(1), before: z.string(), after: z.string(), source: sourceReferenceSchema.optional() })
   ).min(1)
 });
 

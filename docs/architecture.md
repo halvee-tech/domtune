@@ -49,6 +49,7 @@ Codex conversation
   -> adapter asks the generic browser launcher to open an isolated Chromium profile
   -> browser layer injects the agent-neutral overlay with CDP
   -> user selects and adjusts a DOM element
+  -> browser resolves every changed property to an exact source independently
   -> overlay POSTs a ChangeSet to the local bridge
   -> Codex MCP App observes the pending ChangeSet
   -> ui/message continues the same conversation
@@ -59,4 +60,4 @@ Codex conversation
 
 ## Compatibility path
 
-`open_domtune` defaults to controlled-browser mode. Its `link` mode and `@domtune/vite` remain available for project-side injection. Source mapping prefers an explicit `data-domtune-source` hint, then a unique workspace-local source-map position or static utility-class occurrence, then a text-equivalent workspace CSS rule discovered through development-server metadata. Captured values eliminate overridden declarations when their resolved values differ. Ambiguous mappings are not submitted.
+`open_domtune` defaults to controlled-browser mode. Its `link` mode and `@domtune/vite` remain available for project-side injection. Source mapping prefers an explicit `data-domtune-source` hint, then a unique workspace-local source-map position or static utility-class occurrence, then a text-equivalent workspace CSS rule discovered through development-server metadata. Captured values eliminate overridden declarations when their resolved values differ. Properties resolve independently and carry per-change sources; ambiguous mappings are not submitted.

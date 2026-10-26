@@ -11,7 +11,7 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
       <strong>68.4%</strong>
       <small>+8.2% this week</small>
     </article>
-    <article class="${styles.moduleCard}" aria-label="Retention metric card">
+    <article class="${styles.moduleCard} shared-spacing" aria-label="Retention metric card">
       <span>Retention rate</span>
       <strong>81.7%</strong>
       <small>+3.4% this month</small>

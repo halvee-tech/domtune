@@ -12,6 +12,8 @@ DOMTune maps a visual adjustment to source only when it has exact, workspace-loc
 6. Without a usable source map, DOMTune accepts a stylesheet only when its complete runtime text equals the workspace source file exposed through `data-vite-dev-id` or `data-domtune-source-file`. A unique result records `method: css-rule` and `confidence: exact`.
 7. The compatibility injection path performs the equivalent unique-rule check in the page CSSOM, without source-map or utility-class resolution.
 
+Each changed property is resolved independently. `target.source` preserves the first source for older consumers, while `changes[].source` carries the exact source for every property. A submission proceeds only when every changed property resolves.
+
 Explicit hints remain useful for component props, generated styles, cross-origin stylesheets, and frameworks whose runtime CSS does not retain a direct source file.
 
 ## Safety behavior
@@ -21,13 +23,13 @@ Explicit hints remain useful for component props, generated styles, cross-origin
 - Source-map targets must exist in the workspace.
 - Inactive media queries are ignored.
 - Cross-origin or otherwise unreadable stylesheets are skipped.
-- Repeated selectors, multiple matching source rules, missing source text, and multi-rule edits remain unresolved.
+- Repeated selectors, multiple matching source rules for one property, and missing source text remain unresolved.
 - Utility classes must appear as a complete static token exactly once in supported HTML, JavaScript, TypeScript, Vue, Svelte, or Astro source. Dynamic construction and repeated uses remain unresolved.
 - Value-aware cascade filtering removes overridden declarations with different resolved values. Equal-valued competing declarations remain unresolved.
 - An unresolved selection can still be adjusted as a visual draft, but **Send to Agent** refuses to create a ChangeSet and explains how to recover.
 
 ## Current coverage
 
-The Vite fixture deliberately has no `data-domtune-source` attribute. Its ordinary `.metric-card` rule maps automatically to `examples/vite-app/src/style.css`. A CSS Module fixture verifies that a hashed runtime class maps back to `examples/vite-app/src/metric.module.css:1`. A Tailwind v4 fixture verifies that `rounded-[18px]` maps to its unique occurrence in `examples/vite-app/src/main.ts`, while an overridden `44px` declaration is excluded by captured-value filtering. Real-browser smoke coverage also verifies that unresolved competition cannot create a ChangeSet.
+The Vite fixture deliberately has no `data-domtune-source` attribute. Its ordinary `.metric-card` rule maps automatically to `examples/vite-app/src/style.css`. A CSS Module fixture verifies that a hashed runtime class maps back to `examples/vite-app/src/metric.module.css:1`. A Tailwind v4 fixture verifies that `rounded-[18px]` maps to its unique occurrence in `examples/vite-app/src/main.ts`, while an overridden `44px` declaration is excluded by captured-value filtering. A multi-source browser flow changes padding from `style.css` and corner radius from `metric.module.css` in one ChangeSet. Real-browser smoke coverage also verifies that unresolved competition cannot create a ChangeSet.
 
-Vite disables CSS development source maps by default, so projects that want CSS Module or utility-class mapping must enable `css.devSourcemap`. Future mapping work includes dynamic utility expressions, CSS-in-JS, React and Vue component ownership, full cascade ranking, and multi-source ChangeSets.
+Vite disables CSS development source maps by default, so projects that want CSS Module or utility-class mapping must enable `css.devSourcemap`. Future mapping work includes dynamic utility expressions, CSS-in-JS, React and Vue component ownership, and full cascade ranking.

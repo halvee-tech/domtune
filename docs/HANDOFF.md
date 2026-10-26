@@ -54,7 +54,7 @@ Agent-specific behavior must remain in adapters. Do not introduce Codex or Claud
 ```text
 npm install             passed, 0 vulnerabilities
 npm run build           passed
-npm test                passed, 12/12 tests
+npm test                passed, 13/13 tests
 plugin runtime startup  passed
 GET /health             passed
 MCP App panel smoke     passed
@@ -62,6 +62,7 @@ controlled injection    passed without the Vite plugin
 reload reinjection      passed, exactly one overlay
 CSS Module source map   passed end to end in controlled-browser mode
 Tailwind utility mapping passed end to end with cascade filtering
+multi-source ChangeSet passed across CSS and CSS Module files
 ```
 
 The build creates a self-contained local Codex runtime at `dist/plugin/stdio.cjs`. Build output and dependencies are intentionally ignored by Git.
@@ -79,6 +80,7 @@ The build creates a self-contained local Codex runtime at `dist/plugin/stdio.cjs
 - The default fixture maps `.metric-card` to `examples/vite-app/src/style.css:43` without a DOM source hint.
 - The CSS Module fixture maps its hashed runtime class to `examples/vite-app/src/metric.module.css:1` when Vite development source maps are enabled.
 - The Tailwind v4 fixture maps `rounded-[18px]` to its unique static occurrence in `examples/vite-app/src/main.ts` and ignores an overridden `44px` declaration.
+- One ChangeSet can carry distinct `changes[].source` references; the fixture verifies padding in `style.css` and corner radius in `metric.module.css` together.
 - Competing CSS-rule candidates are surfaced as unresolved and cannot produce a ChangeSet.
 
 ## Previous end-to-end baseline
@@ -97,7 +99,7 @@ Run a fresh end-to-end test from a Codex project conversation using this reposit
 
 ## Known limitations
 
-- Automatic mapping currently covers unique CSS rules, CSS Modules, static Tailwind utilities, and different-valued cascade conflicts. Dynamic utility expressions, CSS-in-JS, component ownership, cross-origin stylesheets, equal-valued cascade conflicts, and multi-source edits remain future work.
+- Automatic mapping currently covers unique CSS rules, CSS Modules, static Tailwind utilities, different-valued cascade conflicts, and multi-source edits. Dynamic utility expressions, CSS-in-JS, component ownership, cross-origin stylesheets, and equal-valued cascade conflicts remain future work.
 - Only padding, corner radius, font size, and background color are exposed.
 - The Claude Code adapter is not implemented.
 - Git marketplace installs currently require a local build first; the release packaging strategy still needs to be finalized.

@@ -400,8 +400,8 @@ async function ruleMatchesCapturedValues(client: CdpClient, nodeId: number, prop
   }
 }
 
-function normalizeCssValue(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, " ").replace(/\s*,\s*/g, ", ");
+export function normalizeCssValue(value: string): string {
+  return value.trim().toLowerCase().replace(/\s*!important\s*$/, "").replace(/\s+/g, " ").replace(/\s*,\s*/g, ", ");
 }
 
 async function isTailwindStyleSheet(session: ActiveBrowserSession, header: CdpStyleSheetHeader): Promise<boolean> {

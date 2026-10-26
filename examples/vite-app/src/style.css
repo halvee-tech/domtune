@@ -70,3 +70,5 @@ body { margin: 0; min-width: 320px; min-height: 100vh; }
 }
 
 .metric-card small { color: #1d7a4b; font-weight: 750; }
+
+.shared-spacing { padding: 30px !important; }

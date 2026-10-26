@@ -10,9 +10,9 @@ Use the DOMTune MCP tools to retrieve the requested ChangeSet. Treat captured va
 ## Workflow
 
 1. Call `get_domtune_change_set` with the exact ChangeSet ID from the user message. If the user explicitly requests the latest pending set, call `list_domtune_change_sets` and select only the latest pending item.
-2. Verify that `schemaVersion` is supported and the mapped source file belongs to the current workspace. Treat `source.method: css-rule`, `source.method: source-map`, or `source.method: utility-class` with `source.confidence: exact` as a unique candidate, not proof that a token, utility, or component prop is irrelevant. For `utility-class`, replace or adjust the mapped class token instead of adding an inline style. Stop if the path points outside the workspace or nearby source contradicts the mapping.
+2. Verify that `schemaVersion` is supported and every mapped source file belongs to the current workspace. Prefer each `changes[].source` when present and use `target.source` only as the backward-compatible primary location. Treat `source.method: css-rule`, `source.method: source-map`, or `source.method: utility-class` with `source.confidence: exact` as a unique candidate, not proof that a token, utility, or component prop is irrelevant. For `utility-class`, replace or adjust the mapped class token instead of adding an inline style. Stop if any path points outside the workspace or nearby source contradicts the mapping.
 3. Inspect nearby components, styles, responsive rules, and design tokens. Prefer existing tokens and utilities over new magic values.
-4. Apply the smallest maintainable change that preserves unaffected viewports, states, and component instances.
+4. Apply the smallest maintainable changes across the mapped files while preserving unaffected viewports, states, and component instances.
 5. Run proportionate formatting, type checks, and relevant tests. When a preview command is available, verify the affected viewport.
 6. Call `report_domtune_change_result` with changed files, the verification summary, and either `applied` or `failed`.
 

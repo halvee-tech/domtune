@@ -19,12 +19,27 @@ test("creates, lists, and reports a ChangeSet", async () => {
       label: "Card",
       source: { file: "Card.tsx", line: 8, method: "utility-class", confidence: "exact" }
     },
-    changes: [{ property: "padding", before: "24px", after: "20px" }]
+    changes: [
+      {
+        property: "padding",
+        before: "24px",
+        after: "20px",
+        source: { file: "spacing.css", line: 4, method: "source-map", confidence: "exact" }
+      },
+      {
+        property: "border-radius",
+        before: "16px",
+        after: "20px",
+        source: { file: "Card.tsx", line: 8, method: "utility-class", confidence: "exact" }
+      }
+    ]
   });
 
   assert.equal(created.schemaVersion, 1);
   assert.match(created.id, /^dt_/);
   assert.equal(created.target.source.method, "utility-class");
+  assert.equal(created.changes[0]?.source?.file, "spacing.css");
+  assert.equal(created.changes[1]?.source?.method, "utility-class");
   assert.equal((await store.list("session-1"))[0]?.status, "pending");
 
   const notified = await store.markConversationNotified(created.id);

@@ -331,20 +331,30 @@ export function buildOverlayClient(config: OverlayClientConfig): string {
       sendButton.disabled = true;
       sendButton.textContent = "Mapping…";
       feedbackEl.classList.remove("vt-error");
-      const properties = changes.map((change) => change.property);
-      const before = Object.fromEntries(changes.map((change) => [change.property, change.before]));
       const explicit = explicitSourceFor(selected);
-      const controlled = explicit ? null : await controlledBrowserSource(properties, before);
-      const source = explicit || controlled?.source || (controlled ? null : sourceFor(selected, properties));
-      if (!source) {
+      const resolvedChanges = [];
+      for (const change of changes) {
+        if (explicit) {
+          resolvedChanges.push({ ...change, source: explicit, reason: null });
+          continue;
+        }
+        const controlled = await controlledBrowserSource([change.property], { [change.property]: change.before });
+        const source = controlled?.source || (controlled ? null : sourceFor(selected, [change.property]));
+        resolvedChanges.push({ ...change, source, reason: controlled?.reason || null });
+      }
+      const unresolved = resolvedChanges.find((change) => !change.source);
+      if (unresolved) {
         sendButton.disabled = false;
         sendButton.textContent = "Send to Agent";
-        feedbackEl.textContent = controlled?.reason === "ambiguous"
-          ? "Multiple source rules match this change. Adjust one property or add a source hint."
-          : "Could not map these changes to one source rule. Adjust one property or add a source hint.";
+        feedbackEl.textContent = unresolved.reason === "ambiguous"
+          ? "Multiple source rules match " + unresolved.property + ". Adjust it separately or add a source hint."
+          : "Could not map " + unresolved.property + " to source. Adjust it separately or add a source hint.";
         feedbackEl.classList.add("vt-error");
         return;
       }
+      const mappedChanges = resolvedChanges.map(({ property, before, after, source }) => ({ property, before, after, source }));
+      const source = mappedChanges[0].source;
+      const sourceCount = new Set(mappedChanges.map((change) => change.source.file + ":" + change.source.line)).size;
       sendButton.textContent = "Sending…";
       try {
         const response = await fetch(config.bridgeUrl + "/api/change-sets", {
@@ -357,12 +367,12 @@ export function buildOverlayClient(config: OverlayClientConfig): string {
             pageUrl: location.href,
             viewport: { width: innerWidth, height: innerHeight },
             target: { selector: selectorFor(selected), label: selected.getAttribute("aria-label") || selected.tagName.toLowerCase(), source },
-            changes
+            changes: mappedChanges
           })
         });
         const item = await response.json();
         if (!response.ok) throw new Error(item.error || ("HTTP " + response.status));
-        feedbackEl.textContent = "Sent " + item.id + ". The linked agent conversation can now continue.";
+        feedbackEl.textContent = "Sent " + item.id + (sourceCount > 1 ? " across " + sourceCount + " source targets." : ". The linked agent conversation can now continue.");
         sendButton.textContent = "Sent to Agent";
       } catch (error) {
         sendButton.disabled = false;

@@ -204,7 +204,17 @@ export function createDomTuneMcp(store: ChangeSetStore, baseUrl: string, browser
           })
         }),
         changes: z.array(
-          z.object({ property: z.string().min(1), before: z.string(), after: z.string() })
+          z.object({
+            property: z.string().min(1),
+            before: z.string(),
+            after: z.string(),
+            source: z.object({
+              file: z.string().min(1),
+              line: z.number().int().positive(),
+              method: z.enum(["explicit", "css-rule", "source-map", "utility-class"]).optional(),
+              confidence: z.literal("exact").optional()
+            }).optional()
+          })
         ).min(1)
       },
       annotations: {

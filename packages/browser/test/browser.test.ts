@@ -4,7 +4,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { assertTargetReachable, buildChromiumArgs, chromiumCandidates, cleanupStaleBrowserSessions, cssEscapeIdentifier, findUniqueClassSource, isLocalDevelopmentUrl, resolveSourceMapPosition, validateBrowserSessionInput } from "../src/index.js";
+import { assertTargetReachable, buildChromiumArgs, chromiumCandidates, cleanupStaleBrowserSessions, cssEscapeIdentifier, findUniqueClassSource, isLocalDevelopmentUrl, normalizeCssValue, resolveSourceMapPosition, validateBrowserSessionInput } from "../src/index.js";
 
 test("recognizes loopback development targets", () => {
   assert.equal(isLocalDevelopmentUrl(new URL("http://127.0.0.1:4174/")), true);
@@ -76,6 +76,11 @@ test("maps generated CSS positions to workspace-local original sources", () => {
 test("escapes utility class names as CSS identifiers", () => {
   assert.equal(cssEscapeIdentifier("rounded-[37px]"), "rounded-\\[37px\\]");
   assert.equal(cssEscapeIdentifier("hover:bg-emerald-500/50"), "hover\\:bg-emerald-500\\/50");
+});
+
+test("normalizes captured and important declaration values for cascade filtering", () => {
+  assert.equal(normalizeCssValue(" 30px !important "), "30px");
+  assert.equal(normalizeCssValue("RGB(1,2,3)"), "rgb(1, 2, 3)");
 });
 
 test("finds only a unique static utility class occurrence", async () => {

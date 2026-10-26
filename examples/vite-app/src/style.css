@@ -44,7 +44,7 @@ body { margin: 0; min-width: 320px; min-height: 100vh; }
   width: min(480px, 100%);
   margin-top: 64px;
   padding: 32px;
-  border-radius: 24px;
+  border-radius: 30px;
   background: #f3f5ef;
   box-shadow: 0 28px 70px rgb(25 44 34 / 12%);
 }

@@ -22,7 +22,7 @@ interface ChangeSet {
     source: {
       file: string;
       line: number;
-      method?: "explicit" | "css-rule" | "source-map" | "utility-class" | "component-runtime";
+      method?: "explicit" | "css-rule" | "source-map" | "utility-class" | "component-runtime" | "component-style";
       confidence?: "exact" | "component";
     };
   };
@@ -33,7 +33,7 @@ interface ChangeSet {
     source?: {
       file: string;
       line: number;
-      method?: "explicit" | "css-rule" | "source-map" | "utility-class" | "component-runtime";
+      method?: "explicit" | "css-rule" | "source-map" | "utility-class" | "component-runtime" | "component-style";
       confidence?: "exact" | "component";
     };
   }>;
@@ -53,6 +53,7 @@ interface ChangeSet {
 4. `changes` records visual intent. It does not prescribe whether the implementation should update CSS, a token, a utility class, or a component prop.
 5. An adapter may notify a conversation only once for a given ChangeSet.
 6. Applying a ChangeSet must end with an `applied` or `failed` report containing verification evidence.
-7. `source.method` records whether the producer used an explicit source hint, a unique source-map position, a unique matching CSS rule, or a uniquely located static utility class. Producers must not mark ambiguous candidates as `exact`.
+7. `source.method` records whether the producer used an explicit source hint, a unique source-map position, a unique matching CSS rule, a uniquely located static utility class, framework component ownership, or a statically verified component style declaration. Producers must not mark ambiguous candidates as `exact`.
 8. `target.source` is the primary source for backward compatibility. When one operation spans multiple rules, each `changes[].source` records its own exact target. Consumers should prefer the per-change source when present.
 9. `confidence: component` identifies the owning React or Vue component when no editable style rule can be mapped. It is a scoped inspection starting point, not a claim that the captured value is declared on that exact line.
+10. `method: component-style` with `confidence: exact` identifies one static declaration in the owning component whose browser-resolved value matches the captured pre-edit value. Dynamic and duplicate declarations must not be promoted to this method.

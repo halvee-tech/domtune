@@ -24,13 +24,19 @@ test("creates, lists, and reports a ChangeSet", async () => {
         property: "padding",
         before: "24px",
         after: "20px",
-        source: { file: "Card.vue", line: 1, method: "component-runtime", confidence: "component" }
+        source: { file: "Card.vue", line: 6, method: "component-style", confidence: "exact" }
       },
       {
         property: "border-radius",
         before: "16px",
         after: "20px",
         source: { file: "Card.tsx", line: 8, method: "utility-class", confidence: "exact" }
+      },
+      {
+        property: "background-color",
+        before: "rgb(255, 255, 255)",
+        after: "rgb(248, 248, 248)",
+        source: { file: "Card.vue", line: 1, method: "component-runtime", confidence: "component" }
       }
     ]
   });
@@ -39,8 +45,10 @@ test("creates, lists, and reports a ChangeSet", async () => {
   assert.match(created.id, /^dt_/);
   assert.equal(created.target.source.method, "utility-class");
   assert.equal(created.changes[0]?.source?.file, "Card.vue");
-  assert.equal(created.changes[0]?.source?.confidence, "component");
+  assert.equal(created.changes[0]?.source?.method, "component-style");
+  assert.equal(created.changes[0]?.source?.confidence, "exact");
   assert.equal(created.changes[1]?.source?.method, "utility-class");
+  assert.equal(created.changes[2]?.source?.confidence, "component");
   assert.equal((await store.list("session-1"))[0]?.status, "pending");
 
   const notified = await store.markConversationNotified(created.id);

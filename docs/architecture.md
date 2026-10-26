@@ -22,7 +22,7 @@ DOMTune separates browser interaction, data transport, and coding-agent integrat
 
 ### Controlled browser
 
-`@domtune/browser` owns the agent-neutral browser-session interface, Chromium discovery, isolated profiles, Chrome DevTools Protocol injection, matched-style, source-map, static utility-class, captured-value cascade, and development framework ownership resolution, plus lifecycle recovery. It depends on `@domtune/overlay`, but does not know about MCP or Codex. The current implementation keeps its CDP connection open so injection survives target-page reloads, persists enough metadata to clean confirmed orphaned sessions after a plugin restart, and removes profiles after normal or abnormal exit.
+`@domtune/browser` owns the agent-neutral browser-session interface, Chromium discovery, isolated profiles, Chrome DevTools Protocol injection, matched-style, source-map, static utility-class, captured-value cascade, development framework ownership, and static component-style declaration resolution, plus lifecycle recovery. It depends on `@domtune/overlay`, but does not know about MCP or Codex. The current implementation keeps its CDP connection open so injection survives target-page reloads, persists enough metadata to clean confirmed orphaned sessions after a plugin restart, and removes profiles after normal or abnormal exit.
 
 ### Agent adapters
 
@@ -49,7 +49,7 @@ Codex conversation
   -> adapter asks the generic browser launcher to open an isolated Chromium profile
   -> browser layer injects the agent-neutral overlay with CDP
   -> user selects and adjusts a DOM element
-  -> browser resolves every changed property to an exact source independently
+  -> browser resolves every changed property independently to an exact declaration or a scoped component owner
   -> overlay POSTs a ChangeSet to the local bridge
   -> Codex MCP App observes the pending ChangeSet
   -> ui/message continues the same conversation
@@ -60,4 +60,4 @@ Codex conversation
 
 ## Compatibility path
 
-`open_domtune` defaults to controlled-browser mode. Its `link` mode and `@domtune/vite` remain available for project-side injection. Source mapping prefers an explicit `data-domtune-source` hint, then a unique workspace-local source-map position or static utility-class occurrence, then a text-equivalent workspace CSS rule discovered through development-server metadata. Captured values eliminate overridden declarations when their resolved values differ. React or Vue component ownership is the final, lower-confidence fallback. Properties resolve independently and carry per-change sources; ambiguous mappings are not submitted.
+`open_domtune` defaults to controlled-browser mode. Its `link` mode and `@domtune/vite` remain available for project-side injection. Source mapping prefers an explicit `data-domtune-source` hint, then a unique workspace-local source-map position or static utility-class occurrence, then a text-equivalent workspace CSS rule discovered through development-server metadata. Captured values eliminate overridden declarations when their resolved values differ. React or Vue ownership can then promote one matching static inline declaration to exact `component-style`; dynamic or ambiguous component styles retain lower-confidence ownership. Properties resolve independently and carry per-change sources; unresolved mappings are not submitted.

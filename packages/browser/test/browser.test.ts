@@ -4,7 +4,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { assertTargetReachable, buildChromiumArgs, chromiumCandidates, cleanupStaleBrowserSessions, cssEscapeIdentifier, findUniqueClassSource, isLocalDevelopmentUrl, normalizeCssValue, parseReactStackFrames, resolveSourceMapPosition, validateBrowserSessionInput } from "../src/index.js";
+import { assertTargetReachable, buildChromiumArgs, chromiumCandidates, cleanupStaleBrowserSessions, cssEscapeIdentifier, findComponentStyleDeclarations, findUniqueClassSource, isLocalDevelopmentUrl, literalCssValue, normalizeCssValue, parseReactStackFrames, resolveSourceMapPosition, validateBrowserSessionInput } from "../src/index.js";
 
 test("recognizes loopback development targets", () => {
   assert.equal(isLocalDevelopmentUrl(new URL("http://127.0.0.1:4174/")), true);
@@ -104,6 +104,33 @@ test("escapes utility class names as CSS identifiers", () => {
 test("normalizes captured and important declaration values for cascade filtering", () => {
   assert.equal(normalizeCssValue(" 30px !important "), "30px");
   assert.equal(normalizeCssValue("RGB(1,2,3)"), "rgb(1, 2, 3)");
+});
+
+test("extracts only statically verifiable component style declarations", () => {
+  const source = [
+    "const style = {",
+    "  borderRadius: 26,",
+    "  background: '#fff',",
+    "  padding: theme.spacing.lg",
+    "};",
+    ".card {",
+    "  'border-radius': '30px',",
+    "}"
+  ].join("\n");
+
+  assert.deepEqual(findComponentStyleDeclarations(source, "border-radius"), [
+    { line: 2, value: "26" },
+    { line: 7, value: "'30px'" }
+  ]);
+  assert.deepEqual(findComponentStyleDeclarations(source, "background-color"), [
+    { line: 3, value: "'#fff'" }
+  ]);
+  assert.equal(literalCssValue("26", "border-radius"), "26px");
+  assert.equal(literalCssValue("26px", "border-radius"), "26px");
+  assert.equal(literalCssValue("'30px'", "border-radius"), "30px");
+  assert.equal(literalCssValue("theme.spacing.lg", "padding"), undefined);
+  assert.equal(literalCssValue("calc(13px * 2)", "border-radius"), undefined);
+  assert.equal(literalCssValue("`${radius}px`", "border-radius"), undefined);
 });
 
 test("finds only a unique static utility class occurrence", async () => {

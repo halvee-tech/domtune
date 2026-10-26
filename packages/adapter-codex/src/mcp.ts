@@ -199,7 +199,7 @@ export function createDomTuneMcp(store: ChangeSetStore, baseUrl: string, browser
           source: z.object({
             file: z.string().min(1),
             line: z.number().int().positive(),
-            method: z.enum(["explicit", "css-rule", "source-map", "utility-class", "component-runtime"]).optional(),
+            method: z.enum(["explicit", "css-rule", "source-map", "utility-class", "component-runtime", "component-style"]).optional(),
             confidence: z.enum(["exact", "component"]).optional()
           })
         }),
@@ -211,7 +211,7 @@ export function createDomTuneMcp(store: ChangeSetStore, baseUrl: string, browser
             source: z.object({
               file: z.string().min(1),
               line: z.number().int().positive(),
-              method: z.enum(["explicit", "css-rule", "source-map", "utility-class", "component-runtime"]).optional(),
+              method: z.enum(["explicit", "css-rule", "source-map", "utility-class", "component-runtime", "component-style"]).optional(),
               confidence: z.enum(["exact", "component"]).optional()
             }).optional()
           })

@@ -42,7 +42,7 @@ export interface BrowserSourceResult {
   source?: {
     file: string;
     line: number;
-    method: "source-map" | "css-rule" | "utility-class" | "component-runtime";
+    method: "source-map" | "css-rule" | "utility-class" | "component-runtime" | "component-style";
     confidence: "exact" | "component";
   };
   reason?: "session-not-found" | "target-not-found" | "source-unavailable" | "ambiguous";
@@ -282,7 +282,7 @@ export class ChromiumBrowserSessionLauncher implements BrowserSessionLauncher {
 
     if (candidates.size === 1) return { source: [...candidates.values()][0], candidateCount: 1 };
     if (candidates.size > 1) return { reason: "ambiguous", candidateCount: candidates.size };
-    const componentSource = await resolveComponentOwnerSource(session, queryResult.nodeId);
+    const componentSource = await resolveComponentOwnerSource(session, queryResult.nodeId, input);
     if (componentSource) return { source: componentSource, candidateCount: 1 };
     return { reason: "source-unavailable", candidateCount: 0 };
   }
@@ -374,7 +374,7 @@ interface FrameworkOwnerHint {
   reactStacks?: string[];
 }
 
-async function resolveComponentOwnerSource(session: ActiveBrowserSession, nodeId: number): Promise<BrowserSourceResult["source"] | undefined> {
+async function resolveComponentOwnerSource(session: ActiveBrowserSession, nodeId: number, input: BrowserSourceRequest): Promise<BrowserSourceResult["source"] | undefined> {
   try {
     const resolved = await session.client.send("DOM.resolveNode", { nodeId }) as { object?: { objectId?: string } };
     if (!resolved.object?.objectId) return undefined;
@@ -412,25 +412,97 @@ async function resolveComponentOwnerSource(session: ActiveBrowserSession, nodeId
     }) as { result?: { value?: FrameworkOwnerHint | null } };
     const hint = runtime.result?.value;
     if (!hint) return undefined;
+    let componentSource: BrowserSourceResult["source"] | undefined;
     if (hint.direct) {
       const file = toWorkspaceFile(hint.direct.file, session.input.workspace);
       if (file) {
         try {
           await access(resolve(session.input.workspace, file));
-          return { file, line: hint.direct.line ?? 1, method: "component-runtime", confidence: "component" };
+          componentSource = { file, line: hint.direct.line ?? 1, method: "component-runtime", confidence: "component" };
         } catch {
           return undefined;
         }
       }
     }
-    for (const stack of hint.reactStacks ?? []) {
-      const source = await resolveReactStackSource(session, stack);
-      if (source) return source;
+    if (!componentSource) {
+      for (const stack of hint.reactStacks ?? []) {
+        componentSource = await resolveReactStackSource(session, stack);
+        if (componentSource) break;
+      }
     }
+    if (!componentSource) return undefined;
+    return await resolveComponentStyleSource(session, nodeId, input, componentSource.file) ?? componentSource;
   } catch {
     return undefined;
   }
   return undefined;
+}
+
+export interface ComponentStyleDeclaration {
+  line: number;
+  value: string;
+}
+
+export function findComponentStyleDeclarations(source: string, property: string): ComponentStyleDeclaration[] {
+  const camel = property.replace(/-([a-z])/g, (_match, letter: string) => letter.toUpperCase());
+  const aliases = property === "background-color" ? [camel, "background", property] : [camel, property];
+  const escaped = aliases.map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const pattern = new RegExp(`^\\s*(?:["']?(?:${escaped})["']?)\\s*:\\s*(.+?)\\s*[,;]?\\s*$`);
+  const matches: ComponentStyleDeclaration[] = [];
+  for (const [index, line] of source.split(/\r?\n/).entries()) {
+    const match = pattern.exec(line);
+    if (!match) continue;
+    matches.push({ line: index + 1, value: match[1].replace(/[,;]\s*$/, "").trim() });
+  }
+  return matches;
+}
+
+export function literalCssValue(value: string, property: string): string | undefined {
+  let normalized = value.trim();
+  const quote = normalized[0];
+  if ((quote === '"' || quote === "'" || quote === "`") && normalized.at(-1) === quote) {
+    normalized = normalized.slice(1, -1);
+    if (normalized.includes("${")) return undefined;
+    return normalized;
+  }
+  if (/^-?(?:\d+|\d*\.\d+)$/.test(normalized) && property !== "background-color") return `${normalized}px`;
+  if (/^-?(?:\d+|\d*\.\d+)(?:[a-zA-Z]+|%)$/.test(normalized)) return normalized;
+  if (/^#[\da-fA-F]{3,8}$/.test(normalized)) return normalized;
+  if (/^(?:rgb|rgba|hsl|hsla)\([\d\s.,%/+-]+\)$/.test(normalized)) return normalized;
+  return undefined;
+}
+
+async function resolveComponentStyleSource(
+  session: ActiveBrowserSession,
+  nodeId: number,
+  input: BrowserSourceRequest,
+  componentFile: string
+): Promise<BrowserSourceResult["source"] | undefined> {
+  try {
+    const absolute = resolve(session.input.workspace, componentFile);
+    if ((await stat(absolute)).size > 1_000_000) return undefined;
+    const source = await readFile(absolute, "utf8");
+    const matches: Array<{ line: number; property: string }> = [];
+    for (const property of input.properties) {
+      const before = input.before?.[property];
+      if (!before) continue;
+      for (const declaration of findComponentStyleDeclarations(source, property)) {
+        const value = literalCssValue(declaration.value, property);
+        if (!value) continue;
+        const propertyName = property === "font-size" || property === "background-color" ? property : undefined;
+        const resolved = await session.client.send("CSS.resolveValues", {
+          values: [value],
+          nodeId,
+          ...(propertyName ? { propertyName } : {})
+        }) as { results: string[] };
+        if (normalizeCssValue(resolved.results[0] ?? value) === normalizeCssValue(before)) matches.push({ line: declaration.line, property });
+      }
+    }
+    if (matches.length !== 1) return undefined;
+    return { file: componentFile, line: matches[0].line, method: "component-style", confidence: "exact" };
+  } catch {
+    return undefined;
+  }
 }
 
 async function resolveReactStackSource(session: ActiveBrowserSession, stack: string): Promise<BrowserSourceResult["source"] | undefined> {

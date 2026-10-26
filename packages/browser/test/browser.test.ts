@@ -4,7 +4,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { assertTargetReachable, buildChromiumArgs, chromiumCandidates, cleanupStaleBrowserSessions, cssEscapeIdentifier, findComponentStyleDeclarations, findRelativeTokenImport, findStaticTokenDeclarations, findUniqueClassSource, isLocalDevelopmentUrl, literalCssValue, normalizeCssValue, parseReactStackFrames, resolveSourceMapPosition, validateBrowserSessionInput } from "../src/index.js";
+import { assertTargetReachable, buildChromiumArgs, chromiumCandidates, cleanupStaleBrowserSessions, cssEscapeIdentifier, findComponentStyleDeclarations, findRelativeTokenImport, findStaticObjectTokenDeclarations, findStaticTokenDeclarations, findUniqueClassSource, isLocalDevelopmentUrl, literalCssValue, normalizeCssValue, parseReactStackFrames, resolveSourceMapPosition, validateBrowserSessionInput } from "../src/index.js";
 
 test("recognizes loopback development targets", () => {
   assert.equal(isLocalDevelopmentUrl(new URL("http://127.0.0.1:4174/")), true);
@@ -133,7 +133,7 @@ test("extracts only statically verifiable component style declarations", () => {
   assert.equal(literalCssValue("`${radius}px`", "border-radius"), undefined);
 });
 
-test("resolves only unique const tokens and relative named imports", () => {
+test("resolves only unique const tokens, static object paths, and relative named imports", () => {
   const source = [
     "import { cardRadius as radius } from './theme';",
     "const localRadius: number = 24;",
@@ -148,6 +148,19 @@ test("resolves only unique const tokens and relative named imports", () => {
     { line: 1, value: "20" },
     { line: 2, value: "24" }
   ]);
+  const objectSource = [
+    "export const theme = {",
+    "  card: {",
+    "    radius: 26,",
+    "    surface: '#fff'",
+    "  }",
+    "};"
+  ].join("\n");
+  assert.deepEqual(findStaticObjectTokenDeclarations(objectSource, "theme", ["card", "radius"]), [
+    { path: ["card", "radius"], line: 3, value: "26" }
+  ]);
+  assert.deepEqual(findStaticObjectTokenDeclarations("const theme = {\n  ...base\n};", "theme", ["card", "radius"]), []);
+  assert.deepEqual(findStaticObjectTokenDeclarations(objectSource, "theme", ["card", "missing"]), []);
 });
 
 test("finds only a unique static utility class occurrence", async () => {

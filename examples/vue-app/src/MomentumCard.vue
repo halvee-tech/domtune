@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { momentumCardRadius } from "./theme";
+import { momentumTheme } from "./theme";
 </script>
 
 <template>
@@ -9,7 +9,7 @@ import { momentumCardRadius } from "./theme";
       width: 'min(480px, 100%)',
       marginTop: '56px',
       padding: '30px',
-      borderRadius: momentumCardRadius,
+      borderRadius: momentumTheme.card.radius,
       background: '#e5efe9',
       boxShadow: '0 24px 64px rgb(25 55 40 / 12%)'
     }"

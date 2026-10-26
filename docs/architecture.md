@@ -22,7 +22,7 @@ DOMTune separates browser interaction, data transport, and coding-agent integrat
 
 ### Controlled browser
 
-`@domtune/browser` owns the agent-neutral browser-session interface, Chromium discovery, isolated profiles, Chrome DevTools Protocol injection, matched-style, source-map, static utility-class, captured-value cascade, development framework ownership, static component-style declarations, and restricted scalar-token resolution, plus lifecycle recovery. It depends on `@domtune/overlay`, but does not know about MCP or Codex. The current implementation keeps its CDP connection open so injection survives target-page reloads, persists enough metadata to clean confirmed orphaned sessions after a plugin restart, and removes profiles after normal or abnormal exit.
+`@domtune/browser` owns the agent-neutral browser-session interface, Chromium discovery, isolated profiles, Chrome DevTools Protocol injection, matched-style, source-map, static utility-class, captured-value cascade, development framework ownership, static component-style declarations, and restricted scalar/object-token resolution, plus lifecycle recovery. It depends on `@domtune/overlay`, but does not know about MCP or Codex. The current implementation keeps its CDP connection open so injection survives target-page reloads, persists enough metadata to clean confirmed orphaned sessions after a plugin restart, and removes profiles after normal or abnormal exit.
 
 ### Agent adapters
 

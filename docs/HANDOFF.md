@@ -82,7 +82,7 @@ The build creates a self-contained local Codex runtime at `dist/plugin/stdio.cjs
 - The CSS Module fixture maps its hashed runtime class to `examples/vite-app/src/metric.module.css:1` when Vite development source maps are enabled.
 - The Tailwind v4 fixture maps `rounded-[18px]` to its unique static occurrence in `examples/vite-app/src/main.ts` and ignores an overridden `44px` declaration.
 - One ChangeSet can carry distinct `changes[].source` references; the fixture verifies padding in `style.css` and corner radius in `metric.module.css` together.
-- Inline-style fallback maps React 19 through its debug stack and Vite source map, and Vue 3 through component runtime metadata. Their `borderRadius` declarations now reference scalar constants imported from relative theme modules; each definition is verified against Chrome's resolved value and promoted to exact `component-token` at `examples/react-app/src/theme.ts:1` and `examples/vue-app/src/theme.ts:1`.
+- Inline-style fallback maps React 19 through its debug stack and Vite source map, and Vue 3 through component runtime metadata. Their `borderRadius` declarations now reference `theme.card.radius` through relative theme modules; each static object leaf is verified against Chrome's resolved value and promoted to exact `component-token` at `examples/react-app/src/theme.ts:3` and `examples/vue-app/src/theme.ts:3`.
 - Competing CSS-rule candidates are surfaced as unresolved and cannot produce a ChangeSet.
 
 ## Previous end-to-end baseline
@@ -101,7 +101,7 @@ Run a fresh end-to-end test from a Codex project conversation using this reposit
 
 ## Known limitations
 
-- Automatic mapping currently covers unique CSS rules, CSS Modules, static Tailwind utilities, different-valued cascade conflicts, multi-source edits, React/Vue development component ownership, unique static inline/CSS-in-JS-style declarations, and immutable scalar tokens from same-file or one-hop relative imports. Dynamic utility expressions, object-shaped or computed theme tokens, cross-origin stylesheets, production framework builds, and equal-valued cascade conflicts remain future work.
+- Automatic mapping currently covers unique CSS rules, CSS Modules, static Tailwind utilities, different-valued cascade conflicts, multi-source edits, React/Vue development component ownership, unique static inline/CSS-in-JS-style declarations, immutable scalar tokens, and nested static object-token paths from same-file or one-hop relative imports. Dynamic utility expressions, computed or composed theme tokens, cross-origin stylesheets, production framework builds, and equal-valued cascade conflicts remain future work.
 - Only padding, corner radius, font size, and background color are exposed.
 - The Claude Code adapter is not implemented.
 - Git marketplace installs currently require a local build first; the release packaging strategy still needs to be finalized.

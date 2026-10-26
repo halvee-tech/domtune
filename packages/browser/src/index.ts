@@ -448,6 +448,10 @@ export interface StaticTokenDeclaration {
   value: string;
 }
 
+export interface StaticObjectTokenDeclaration extends StaticTokenDeclaration {
+  path: string[];
+}
+
 export interface RelativeTokenImport {
   imported: string;
   specifier: string;
@@ -493,6 +497,119 @@ export function findStaticTokenDeclarations(source: string, identifier: string):
     matches.push({ line: index + 1, value: match[1].replace(/;\s*$/, "").trim() });
   }
   return matches;
+}
+
+export function findStaticObjectTokenDeclarations(source: string, identifier: string, path: string[]): StaticObjectTokenDeclaration[] {
+  if (!/^[A-Za-z_$][\w$]*$/.test(identifier) || path.length === 0 || path.some((part) => !/^[A-Za-z_$][\w$]*$/.test(part))) return [];
+  const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`^\\s*(?:export\\s+)?const\\s+${escaped}(?:\\s*:\\s*[^=;]+)?\\s*=\\s*{\\s*$`, "gm");
+  const matches: StaticObjectTokenDeclaration[] = [];
+  for (let match = pattern.exec(source); match; match = pattern.exec(source)) {
+    const openBrace = source.indexOf("{", match.index);
+    const parsed = parseStaticObject(source, openBrace, []);
+    if (!parsed) continue;
+    matches.push(...parsed.declarations.filter((declaration) => declaration.path.length === path.length && declaration.path.every((part, index) => part === path[index])));
+  }
+  return matches;
+}
+
+function parseStaticObject(source: string, start: number, parentPath: string[]): { end: number; declarations: StaticObjectTokenDeclaration[] } | undefined {
+  if (source[start] !== "{") return undefined;
+  const declarations: StaticObjectTokenDeclaration[] = [];
+  let index = start + 1;
+  while (index < source.length) {
+    index = skipStaticTrivia(source, index);
+    if (source[index] === "}") return { end: index + 1, declarations };
+    const key = readStaticObjectKey(source, index);
+    if (!key) return undefined;
+    index = skipStaticTrivia(source, key.end);
+    if (source[index] !== ":") return undefined;
+    index = skipStaticTrivia(source, index + 1);
+    const tokenPath = [...parentPath, key.value];
+    if (source[index] === "{") {
+      const nested = parseStaticObject(source, index, tokenPath);
+      if (!nested) return undefined;
+      declarations.push(...nested.declarations);
+      index = nested.end;
+    } else {
+      const value = readStaticObjectValue(source, index);
+      if (!value) return undefined;
+      declarations.push({ path: tokenPath, line: source.slice(0, index).split("\n").length, value: value.value.trim() });
+      index = value.end;
+    }
+    index = skipStaticTrivia(source, index);
+    if (source[index] === ",") {
+      index += 1;
+      continue;
+    }
+    if (source[index] === "}") continue;
+    return undefined;
+  }
+  return undefined;
+}
+
+function skipStaticTrivia(source: string, start: number): number {
+  let index = start;
+  while (index < source.length) {
+    if (/\s/.test(source[index])) {
+      index += 1;
+      continue;
+    }
+    if (source.startsWith("//", index)) {
+      index = source.indexOf("\n", index + 2);
+      if (index < 0) return source.length;
+      continue;
+    }
+    if (source.startsWith("/*", index)) {
+      const end = source.indexOf("*/", index + 2);
+      return end < 0 ? source.length : skipStaticTrivia(source, end + 2);
+    }
+    break;
+  }
+  return index;
+}
+
+function readStaticObjectKey(source: string, start: number): { value: string; end: number } | undefined {
+  const identifier = /^[A-Za-z_$][\w$]*/.exec(source.slice(start));
+  if (identifier) return { value: identifier[0], end: start + identifier[0].length };
+  const quote = source[start];
+  if (quote !== '"' && quote !== "'") return undefined;
+  let index = start + 1;
+  while (index < source.length && source[index] !== quote) {
+    if (source[index] === "\\") return undefined;
+    index += 1;
+  }
+  return source[index] === quote ? { value: source.slice(start + 1, index), end: index + 1 } : undefined;
+}
+
+function readStaticObjectValue(source: string, start: number): { value: string; end: number } | undefined {
+  let quote: string | undefined;
+  let escaped = false;
+  let parentheses = 0;
+  let brackets = 0;
+  for (let index = start; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = undefined;
+      continue;
+    }
+    if (character === '"' || character === "'" || character === "`") {
+      quote = character;
+      continue;
+    }
+    if (character === "(") parentheses += 1;
+    else if (character === ")") parentheses -= 1;
+    else if (character === "[") brackets += 1;
+    else if (character === "]") brackets -= 1;
+    else if ((character === "," || character === "}") && parentheses === 0 && brackets === 0) {
+      const value = source.slice(start, index).trim();
+      return value ? { value, end: index } : undefined;
+    }
+    if (parentheses < 0 || brackets < 0) return undefined;
+  }
+  return undefined;
 }
 
 export function findRelativeTokenImport(source: string, localName: string): RelativeTokenImport | undefined {
@@ -561,15 +678,13 @@ async function resolveStaticComponentToken(
   expression: string,
   property: string
 ): Promise<{ file: string; line: number; value: string } | undefined> {
-  const identifier = expression.trim();
-  if (!/^[A-Za-z_$][\w$]*$/.test(identifier)) return undefined;
+  const reference = expression.trim().split(".");
+  if (reference.some((part) => !/^[A-Za-z_$][\w$]*$/.test(part))) return undefined;
+  const [identifier, ...memberPath] = reference;
 
-  const local = findStaticTokenDeclarations(componentSource, identifier);
-  if (local.length === 1) {
-    const value = literalCssValue(local[0].value, property);
-    if (value) return { file: componentFile, line: local[0].line, value };
-  }
-  if (local.length > 0) return undefined;
+  const local = resolveStaticTokenInSource(componentSource, identifier, memberPath, property);
+  if (local) return { file: componentFile, ...local };
+  if (findStaticTokenDeclarations(componentSource, identifier).length > 0 || findStaticObjectTokenDeclarations(componentSource, identifier, memberPath).length > 0) return undefined;
 
   const imported = findRelativeTokenImport(componentSource, identifier);
   if (!imported) return undefined;
@@ -584,15 +699,22 @@ async function resolveStaticComponentToken(
     try {
       if ((await stat(candidate)).size > 1_000_000) return undefined;
       const source = await readFile(candidate, "utf8");
-      const declarations = findStaticTokenDeclarations(source, imported.imported);
-      if (declarations.length !== 1) return undefined;
-      const value = literalCssValue(declarations[0].value, property);
-      return value ? { file, line: declarations[0].line, value } : undefined;
+      const token = resolveStaticTokenInSource(source, imported.imported, memberPath, property);
+      return token ? { file, ...token } : undefined;
     } catch {
       continue;
     }
   }
   return undefined;
+}
+
+function resolveStaticTokenInSource(source: string, identifier: string, memberPath: string[], property: string): { line: number; value: string } | undefined {
+  const declarations = memberPath.length === 0
+    ? findStaticTokenDeclarations(source, identifier)
+    : findStaticObjectTokenDeclarations(source, identifier, memberPath);
+  if (declarations.length !== 1) return undefined;
+  const value = literalCssValue(declarations[0].value, property);
+  return value ? { line: declarations[0].line, value } : undefined;
 }
 
 async function resolveReactStackSource(session: ActiveBrowserSession, stack: string): Promise<BrowserSourceResult["source"] | undefined> {

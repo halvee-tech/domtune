@@ -1,4 +1,4 @@
-import { insightCardRadius } from "./theme";
+import { insightTheme } from "./theme";
 
 export function InsightCard() {
   return (
@@ -8,7 +8,7 @@ export function InsightCard() {
         width: "min(480px, 100%)",
         marginTop: 56,
         padding: 30,
-        borderRadius: insightCardRadius,
+        borderRadius: insightTheme.card.radius,
         background: "#f4eee2",
         boxShadow: "0 24px 64px rgb(54 43 24 / 12%)"
       }}

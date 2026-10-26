@@ -1,1 +1,5 @@
-export const insightCardRadius = 26;
+export const insightTheme = {
+  card: {
+    radius: 26
+  }
+};

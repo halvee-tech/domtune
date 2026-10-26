@@ -2,9 +2,10 @@ import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { ChangeSetStore } from "@domtune/transport";
+import type { BrowserSessionLauncher } from "@domtune/browser";
 import { buildPanelHtml, TUNER_URI } from "./ui.js";
 
-export function createDomTuneMcp(store: ChangeSetStore, baseUrl: string): McpServer {
+export function createDomTuneMcp(store: ChangeSetStore, baseUrl: string, browserLauncher: BrowserSessionLauncher): McpServer {
   const server = new McpServer({ name: "domtune", version: "0.1.0" });
 
   server.registerResource(
@@ -40,10 +41,11 @@ export function createDomTuneMcp(store: ChangeSetStore, baseUrl: string): McpSer
     "open_domtune",
     {
       title: "Open DOMTune",
-      description: "Open the DOMTune bridge for the current conversation and create a page-adjustment session. Pass the absolute current workspace and target development URL when available.",
+      description: "Create a DOMTune session and open the target localhost development page in an isolated controlled browser with the overlay injected. Pass the absolute current workspace. Use mode link only for legacy project-side injection.",
       inputSchema: {
-        workspace: z.string().optional(),
-        targetUrl: z.string().url().optional()
+        workspace: z.string().min(1),
+        targetUrl: z.string().url().optional(),
+        mode: z.enum(["controlled", "link"]).optional()
       },
       outputSchema: {
         sessionId: z.string(),
@@ -51,10 +53,14 @@ export function createDomTuneMcp(store: ChangeSetStore, baseUrl: string): McpSer
         demoUrl: z.string(),
         panelPreviewUrl: z.string(),
         apiBaseUrl: z.string(),
-        workspace: z.string()
+        workspace: z.string(),
+        mode: z.enum(["controlled", "link"]),
+        browser: z.string().optional(),
+        browserPid: z.number().optional(),
+        debugPort: z.number().optional()
       },
       annotations: {
-        readOnlyHint: true,
+        readOnlyHint: false,
         destructiveHint: false,
         idempotentHint: false,
         openWorldHint: false
@@ -64,26 +70,66 @@ export function createDomTuneMcp(store: ChangeSetStore, baseUrl: string): McpSer
         "openai/outputTemplate": TUNER_URI
       }
     },
-    async ({ workspace, targetUrl }) => {
+    async ({ workspace, targetUrl, mode }) => {
       const sessionId = `dt_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
       const overlayUrl = new URL(targetUrl ?? "http://127.0.0.1:4174/");
       overlayUrl.searchParams.set("domTuneSession", sessionId);
+      const resolvedWorkspace = workspace;
+      const resolvedMode = mode ?? "controlled";
+      const browserSession = resolvedMode === "controlled"
+        ? await browserLauncher.open({
+            sessionId,
+            targetUrl: overlayUrl.toString(),
+            bridgeUrl: baseUrl,
+            workspace: resolvedWorkspace
+          })
+        : undefined;
       const structuredContent = {
         sessionId,
         overlayUrl: overlayUrl.toString(),
         demoUrl: `${baseUrl}/demo?session=${sessionId}`,
         panelPreviewUrl: `${baseUrl}/panel-preview?session=${sessionId}`,
         apiBaseUrl: baseUrl,
-        workspace: workspace ?? "."
+        workspace: resolvedWorkspace,
+        mode: resolvedMode,
+        ...(browserSession ? {
+          browser: browserSession.browser,
+          browserPid: browserSession.pid,
+          debugPort: browserSession.debugPort
+        } : {})
       };
       return {
         structuredContent,
         content: [
           {
             type: "text",
-            text: `DOMTune session ${sessionId} is ready. Open ${structuredContent.overlayUrl} to tune the real application DOM; the embedded panel will bridge submitted ChangeSets back to this conversation.`
+            text: browserSession
+              ? `DOMTune session ${sessionId} is open in a controlled ${browserSession.browser} window with the overlay injected. Submitted ChangeSets will return to this conversation.`
+              : `DOMTune session ${sessionId} is ready. Open ${structuredContent.overlayUrl} in a page that already injects the DOMTune overlay.`
           }
         ]
+      };
+    }
+  );
+
+  server.registerTool(
+    "close_domtune",
+    {
+      title: "Close DOMTune",
+      description: "Close the controlled browser window for a DOMTune session.",
+      inputSchema: { sessionId: z.string().min(1) },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ sessionId }) => {
+      const closed = await browserLauncher.close(sessionId);
+      return {
+        structuredContent: { sessionId, closed },
+        content: [{ type: "text", text: closed ? `Closed DOMTune session ${sessionId}.` : `DOMTune session ${sessionId} did not have an active controlled browser.` }]
       };
     }
   );

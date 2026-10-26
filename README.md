@@ -15,13 +15,14 @@ This repository contains the first engineering migration of the validated DOMTun
 - a Codex MCP App bridge that can continue the originating conversation;
 - an agent skill for applying a ChangeSet to source code.
 
-The managed-browser, zero-project-configuration flow and the Claude Code adapter are planned but are not implemented yet.
+The default Codex flow now launches an isolated Chromium window and injects the overlay through the Chrome DevTools Protocol, so target projects do not need DOMTune in their Vite configuration. The Claude Code adapter is still planned.
 
 ## Architecture
 
 ```text
 Live frontend
-  -> @domtune/overlay
+  <- @domtune/browser injects @domtune/overlay
+  -> @domtune/overlay captures intent
   -> versioned ChangeSet
   -> @domtune/transport
   -> agent adapter
@@ -37,6 +38,7 @@ The core protocol and browser overlay do not depend on an agent vendor. See [Arc
 | --- | --- |
 | `@domtune/core` | ChangeSet types, schema version, and runtime validation |
 | `@domtune/overlay` | Agent-neutral browser overlay client |
+| `@domtune/browser` | Agent-neutral controlled Chromium launcher and CDP injector |
 | `@domtune/transport` | Persistent ChangeSet repository |
 | `@domtune/vite` | Development-time Vite injection |
 | `@domtune/adapter-codex` | MCP tools, local bridge, and Codex conversation UI |
@@ -51,20 +53,30 @@ npm run build
 npm test
 ```
 
-Run the local bridge and the Vite fixture in separate terminals:
+Run the local bridge and an ordinary development server in separate terminals:
 
 ```bash
 npm start
 npm run demo:vite
 ```
 
-Then open a DOMTune session through the MCP tool, or use a fixture URL such as:
+Then call `open_domtune` with the absolute workspace and development URL. DOMTune opens an isolated Chrome, Chromium, Edge, or Brave window and injects the overlay without changing the target project's configuration.
+
+The default fixture deliberately does not load `@domtune/vite`. To exercise the legacy project-side injection path instead, run:
+
+```bash
+npm run demo:vite:injected
+```
+
+The equivalent legacy session URL is:
 
 ```text
 http://127.0.0.1:4174/?domTuneSession=local-demo
 ```
 
 The local bridge listens on `http://127.0.0.1:47822` by default. Override it with `DOMTUNE_PORT` and pass the matching `bridgeUrl` to the Vite plugin when using a custom port.
+
+Controlled-browser mode accepts localhost targets by default and uses a dedicated browser profile per DOMTune session. Set `DOMTUNE_BROWSER_EXECUTABLE` to an absolute Chromium-family executable when automatic discovery is insufficient. Remote targets require the explicit `DOMTUNE_ALLOW_REMOTE_TARGETS=1` opt-in. Use `close_domtune` to close a session's controlled browser.
 
 ## Codex plugin development
 

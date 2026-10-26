@@ -6,14 +6,16 @@
   "workspaces": [
     "packages/core",
     "packages/overlay",
+    "packages/browser",
     "packages/transport",
     "packages/vite",
     "packages/adapter-codex"
   ],
   "scripts": {
-    "build": "npm run build:core && npm run build:overlay && npm run build:transport && npm run build:vite && npm run build:adapter-codex && npm run bundle:plugin",
+    "build": "npm run build:core && npm run build:overlay && npm run build:browser && npm run build:transport && npm run build:vite && npm run build:adapter-codex && npm run bundle:plugin",
     "build:core": "npm run build -w @domtune/core",
     "build:overlay": "npm run build -w @domtune/overlay",
+    "build:browser": "npm run build -w @domtune/browser",
     "build:transport": "npm run build -w @domtune/transport",
     "build:vite": "npm run build -w @domtune/vite",
     "build:adapter-codex": "npm run build -w @domtune/adapter-codex",
@@ -22,7 +24,8 @@
     "test": "npm run build && node --import tsx --test packages/*/test/*.test.ts",
     "start": "npm run start -w @domtune/adapter-codex",
     "dev": "npm run dev -w @domtune/adapter-codex",
-    "demo:vite": "vite --config examples/vite-app/vite.config.ts"
+    "demo:vite": "vite --config examples/vite-app/vite.config.ts",
+    "demo:vite:injected": "vite --config examples/vite-app/vite.injected.config.ts"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",

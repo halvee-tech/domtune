@@ -26,12 +26,13 @@ Install the agent plugin once
   -> the same conversation applies and verifies the source change
 ```
 
-The controlled-browser, zero-project-configuration path is the next product milestone. The migrated implementation currently retains Vite injection as the working integration.
+The first controlled-browser, zero-project-configuration slice is now implemented for Chromium-family browsers. Vite injection remains as a compatibility path.
 
 ## Current architecture
 
 - `@domtune/core`: versioned ChangeSet types and Zod validation.
 - `@domtune/overlay`: agent-neutral page overlay.
+- `@domtune/browser`: agent-neutral Chromium launcher and CDP injector.
 - `@domtune/transport`: persistent ChangeSet repository.
 - `@domtune/vite`: development-time Vite injection.
 - `@domtune/adapter-codex`: local bridge, MCP tools, MCP App, and Codex `ui/message` flow.
@@ -53,16 +54,26 @@ Agent-specific behavior must remain in adapters. Do not introduce Codex or Claud
 ```text
 npm install             passed, 0 vulnerabilities
 npm run build           passed
-npm test                passed, 3/3 tests
+npm test                passed, 7/7 tests
 plugin runtime startup  passed
 GET /health             passed
 MCP App panel smoke     passed
-Vite overlay injection  passed
+controlled injection    passed without the Vite plugin
+reload reinjection      passed, exactly one overlay
 ```
 
 The build creates a self-contained local Codex runtime at `dist/plugin/stdio.cjs`. Build output and dependencies are intentionally ignored by Git.
 
-## Immediate next task
+## Controlled-browser milestone
+
+- `open_domtune` defaults to an isolated controlled Chromium session.
+- Chrome, Chromium, Microsoft Edge, and Brave are discovered from platform-standard locations.
+- CDP injects the overlay into the current page and future page reloads.
+- The ordinary Vite fixture no longer installs the DOMTune Vite plugin.
+- Localhost targets are allowed by default; remote targets require explicit opt-in.
+- `close_domtune` closes the browser associated with a session.
+
+## Previous end-to-end baseline
 
 Run a fresh end-to-end test from a Codex project conversation using this repository rather than the old PoC:
 
@@ -80,7 +91,6 @@ Run a fresh end-to-end test from a Codex project conversation using this reposit
 
 - Source mapping still depends on an explicit `data-domtune-source` hint.
 - Only padding, corner radius, font size, and background color are exposed.
-- The controlled-browser launcher is not implemented.
 - The Claude Code adapter is not implemented.
 - Git marketplace installs currently require a local build first; the release packaging strategy still needs to be finalized.
 - No open-source license has been selected yet.

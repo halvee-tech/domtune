@@ -9,6 +9,8 @@ test("the overlay is agent-neutral and emits the DOMTune session contract", () =
   });
 
   assert.match(client, /domTuneSession/);
+  assert.match(client, /document\.querySelector\("domtune-overlay"\)/);
+  assert.match(client, /DOMContentLoaded/);
   assert.match(client, /data-domtune-source/);
   assert.match(client, /Send to Agent/);
   assert.doesNotMatch(client, /Send to Codex/);

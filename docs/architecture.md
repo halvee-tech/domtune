@@ -18,7 +18,11 @@ DOMTune separates browser interaction, data transport, and coding-agent integrat
 
 ### Framework integration
 
-`@domtune/vite` injects the overlay during development. It is an integration package, not part of the core protocol. A controlled-browser injector can be added without changing ChangeSet consumers.
+`@domtune/vite` injects the overlay during development. It is an optional compatibility integration, not part of the core protocol. Controlled-browser injection uses the same overlay without changing ChangeSet consumers.
+
+### Controlled browser
+
+`@domtune/browser` owns the agent-neutral browser-session interface, Chromium discovery, isolated profiles, and Chrome DevTools Protocol injection. It depends on `@domtune/overlay`, but does not know about MCP or Codex. The current implementation keeps its CDP connection open so injection survives target-page reloads.
 
 ### Agent adapters
 
@@ -28,8 +32,10 @@ DOMTune separates browser interaction, data transport, and coding-agent integrat
 
 ```text
 core <- transport <- adapter-codex
-             ^
-overlay <- vite
+                         ^
+overlay <- vite          |
+   ^                     |
+   └──── browser ────────┘
 ```
 
 Agent adapters may depend on core and transport. Core, overlay, and transport must never depend on an agent adapter.
@@ -40,7 +46,8 @@ Agent adapters may depend on core and transport. Core, overlay, and transport mu
 Codex conversation
   -> open_domtune
   -> session ID + target URL
-  -> Vite page loads the overlay
+  -> adapter asks the generic browser launcher to open an isolated Chromium profile
+  -> browser layer injects the agent-neutral overlay with CDP
   -> user selects and adjusts a DOM element
   -> overlay POSTs a ChangeSet to the local bridge
   -> Codex MCP App observes the pending ChangeSet
@@ -50,6 +57,6 @@ Codex conversation
   -> agent calls report_domtune_change_result
 ```
 
-## Next architectural step
+## Compatibility path
 
-Add a controlled-browser launcher behind a generic browser-session interface. That will make the default flow project-configuration-free while retaining `@domtune/vite` as an optional enhanced source-mapping integration.
+`open_domtune` defaults to controlled-browser mode. Its `link` mode and `@domtune/vite` remain available for project-side injection. Explicit `data-domtune-source` hints are still the current source-mapping mechanism in either mode.

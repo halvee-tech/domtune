@@ -5,6 +5,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { NextFunction, Request, Response } from "express";
 import { newChangeSetSchema } from "@domtune/core";
 import { ChangeSetStore } from "@domtune/transport";
+import { ChromiumBrowserSessionLauncher } from "@domtune/browser";
 import { createDomTuneMcp } from "./mcp.js";
 import { buildDemoHtml, buildPanelHtml } from "./ui.js";
 
@@ -14,6 +15,7 @@ export const baseUrl = `http://${host}:${port}`;
 export const projectRoot = resolve(process.env.DOMTUNE_ROOT ?? process.cwd());
 export const dataRoot = resolve(process.env.PLUGIN_DATA ?? projectRoot);
 export const store = new ChangeSetStore(resolve(dataRoot, ".domtune/change-sets.json"));
+export const browserLauncher = new ChromiumBrowserSessionLauncher({ dataRoot });
 const app = createMcpExpressApp({ host });
 
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -62,7 +64,7 @@ app.post("/api/change-sets", async (req: Request, res: Response) => {
 });
 
 app.post("/mcp", async (req: Request, res: Response) => {
-  const server = createDomTuneMcp(store, baseUrl);
+    const server = createDomTuneMcp(store, baseUrl, browserLauncher);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   try {
     await server.connect(transport);

@@ -1,6 +1,8 @@
 export interface OverlayClientConfig {
   bridgeUrl: string;
   workspace: string;
+  sessionId?: string;
+  targetOrigin?: string;
 }
 
 export function buildOverlayClient(config: OverlayClientConfig): string {
@@ -42,10 +44,13 @@ export function buildOverlayClient(config: OverlayClientConfig): string {
       <p class="vt-feedback" role="status"></p>
     </section>`;
 
-  return `
+  return `(() => {
     const config = ${JSON.stringify(config)};
+    if (config.targetOrigin && location.origin !== config.targetOrigin) return;
+    const mount = () => {
+    if (document.querySelector("domtune-overlay")) return;
     const params = new URLSearchParams(location.search);
-    const sessionId = params.get("domTuneSession") || "";
+    const sessionId = config.sessionId || params.get("domTuneSession") || "";
     const host = document.createElement("domtune-overlay");
     const shadow = host.attachShadow({ mode: "open" });
     shadow.innerHTML = ${JSON.stringify(markup)};
@@ -234,5 +239,8 @@ export function buildOverlayClient(config: OverlayClientConfig): string {
         feedbackEl.classList.add("vt-error");
       }
     });
-  `;
+    };
+    if (document.documentElement) mount();
+    else document.addEventListener("DOMContentLoaded", mount, { once: true });
+  })();`;
 }

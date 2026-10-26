@@ -42,7 +42,7 @@ export interface BrowserSourceResult {
   source?: {
     file: string;
     line: number;
-    method: "source-map" | "css-rule" | "utility-class" | "component-runtime" | "component-style";
+    method: "source-map" | "css-rule" | "utility-class" | "component-runtime" | "component-style" | "component-token";
     confidence: "exact" | "component";
   };
   reason?: "session-not-found" | "target-not-found" | "source-unavailable" | "ambiguous";
@@ -443,6 +443,16 @@ export interface ComponentStyleDeclaration {
   value: string;
 }
 
+export interface StaticTokenDeclaration {
+  line: number;
+  value: string;
+}
+
+export interface RelativeTokenImport {
+  imported: string;
+  specifier: string;
+}
+
 export function findComponentStyleDeclarations(source: string, property: string): ComponentStyleDeclaration[] {
   const camel = property.replace(/-([a-z])/g, (_match, letter: string) => letter.toUpperCase());
   const aliases = property === "background-color" ? [camel, "background", property] : [camel, property];
@@ -472,6 +482,34 @@ export function literalCssValue(value: string, property: string): string | undef
   return undefined;
 }
 
+export function findStaticTokenDeclarations(source: string, identifier: string): StaticTokenDeclaration[] {
+  if (!/^[A-Za-z_$][\w$]*$/.test(identifier)) return [];
+  const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`^\\s*(?:export\\s+)?const\\s+${escaped}(?:\\s*:\\s*[^=;]+)?\\s*=\\s*(.+?)\\s*;?\\s*$`);
+  const matches: StaticTokenDeclaration[] = [];
+  for (const [index, line] of source.split(/\r?\n/).entries()) {
+    const match = pattern.exec(line);
+    if (!match) continue;
+    matches.push({ line: index + 1, value: match[1].replace(/;\s*$/, "").trim() });
+  }
+  return matches;
+}
+
+export function findRelativeTokenImport(source: string, localName: string): RelativeTokenImport | undefined {
+  if (!/^[A-Za-z_$][\w$]*$/.test(localName)) return undefined;
+  const matches: RelativeTokenImport[] = [];
+  const pattern = /import\s*{([^}]+)}\s*from\s*["'](\.[^"']*)["']/g;
+  for (let match = pattern.exec(source); match; match = pattern.exec(source)) {
+    for (const binding of match[1].split(",")) {
+      const parts = binding.trim().split(/\s+as\s+/);
+      const imported = parts[0]?.trim();
+      const local = (parts[1] ?? parts[0])?.trim();
+      if (imported && local === localName) matches.push({ imported, specifier: match[2] });
+    }
+  }
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 async function resolveComponentStyleSource(
   session: ActiveBrowserSession,
   nodeId: number,
@@ -482,27 +520,79 @@ async function resolveComponentStyleSource(
     const absolute = resolve(session.input.workspace, componentFile);
     if ((await stat(absolute)).size > 1_000_000) return undefined;
     const source = await readFile(absolute, "utf8");
-    const matches: Array<{ line: number; property: string }> = [];
+    const matches: Array<NonNullable<BrowserSourceResult["source"]>> = [];
     for (const property of input.properties) {
       const before = input.before?.[property];
       if (!before) continue;
       for (const declaration of findComponentStyleDeclarations(source, property)) {
-        const value = literalCssValue(declaration.value, property);
-        if (!value) continue;
+        let value = literalCssValue(declaration.value, property);
+        let candidate: NonNullable<BrowserSourceResult["source"]> = {
+          file: componentFile,
+          line: declaration.line,
+          method: "component-style",
+          confidence: "exact"
+        };
+        if (!value) {
+          const token = await resolveStaticComponentToken(session.input.workspace, componentFile, source, declaration.value, property);
+          if (!token) continue;
+          value = token.value;
+          candidate = { file: token.file, line: token.line, method: "component-token", confidence: "exact" };
+        }
         const propertyName = property === "font-size" || property === "background-color" ? property : undefined;
         const resolved = await session.client.send("CSS.resolveValues", {
           values: [value],
           nodeId,
           ...(propertyName ? { propertyName } : {})
         }) as { results: string[] };
-        if (normalizeCssValue(resolved.results[0] ?? value) === normalizeCssValue(before)) matches.push({ line: declaration.line, property });
+        if (normalizeCssValue(resolved.results[0] ?? value) === normalizeCssValue(before)) matches.push(candidate);
       }
     }
     if (matches.length !== 1) return undefined;
-    return { file: componentFile, line: matches[0].line, method: "component-style", confidence: "exact" };
+    return matches[0];
   } catch {
     return undefined;
   }
+}
+
+async function resolveStaticComponentToken(
+  workspace: string,
+  componentFile: string,
+  componentSource: string,
+  expression: string,
+  property: string
+): Promise<{ file: string; line: number; value: string } | undefined> {
+  const identifier = expression.trim();
+  if (!/^[A-Za-z_$][\w$]*$/.test(identifier)) return undefined;
+
+  const local = findStaticTokenDeclarations(componentSource, identifier);
+  if (local.length === 1) {
+    const value = literalCssValue(local[0].value, property);
+    if (value) return { file: componentFile, line: local[0].line, value };
+  }
+  if (local.length > 0) return undefined;
+
+  const imported = findRelativeTokenImport(componentSource, identifier);
+  if (!imported) return undefined;
+  const componentAbsolute = resolve(workspace, componentFile);
+  const importBase = resolve(dirname(componentAbsolute), imported.specifier);
+  const candidates = extname(importBase)
+    ? [importBase]
+    : [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"].flatMap((extension) => [`${importBase}${extension}`, join(importBase, `index${extension}`)]);
+  for (const candidate of candidates) {
+    const file = toWorkspaceFile(candidate, workspace);
+    if (!file) continue;
+    try {
+      if ((await stat(candidate)).size > 1_000_000) return undefined;
+      const source = await readFile(candidate, "utf8");
+      const declarations = findStaticTokenDeclarations(source, imported.imported);
+      if (declarations.length !== 1) return undefined;
+      const value = literalCssValue(declarations[0].value, property);
+      return value ? { file, line: declarations[0].line, value } : undefined;
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
 }
 
 async function resolveReactStackSource(session: ActiveBrowserSession, stack: string): Promise<BrowserSourceResult["source"] | undefined> {

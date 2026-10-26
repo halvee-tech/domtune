@@ -4,7 +4,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { assertTargetReachable, buildChromiumArgs, chromiumCandidates, cleanupStaleBrowserSessions, cssEscapeIdentifier, findComponentStyleDeclarations, findUniqueClassSource, isLocalDevelopmentUrl, literalCssValue, normalizeCssValue, parseReactStackFrames, resolveSourceMapPosition, validateBrowserSessionInput } from "../src/index.js";
+import { assertTargetReachable, buildChromiumArgs, chromiumCandidates, cleanupStaleBrowserSessions, cssEscapeIdentifier, findComponentStyleDeclarations, findRelativeTokenImport, findStaticTokenDeclarations, findUniqueClassSource, isLocalDevelopmentUrl, literalCssValue, normalizeCssValue, parseReactStackFrames, resolveSourceMapPosition, validateBrowserSessionInput } from "../src/index.js";
 
 test("recognizes loopback development targets", () => {
   assert.equal(isLocalDevelopmentUrl(new URL("http://127.0.0.1:4174/")), true);
@@ -131,6 +131,23 @@ test("extracts only statically verifiable component style declarations", () => {
   assert.equal(literalCssValue("theme.spacing.lg", "padding"), undefined);
   assert.equal(literalCssValue("calc(13px * 2)", "border-radius"), undefined);
   assert.equal(literalCssValue("`${radius}px`", "border-radius"), undefined);
+});
+
+test("resolves only unique const tokens and relative named imports", () => {
+  const source = [
+    "import { cardRadius as radius } from './theme';",
+    "const localRadius: number = 24;",
+    "let mutableRadius = 30;"
+  ].join("\n");
+
+  assert.deepEqual(findRelativeTokenImport(source, "radius"), { imported: "cardRadius", specifier: "./theme" });
+  assert.equal(findRelativeTokenImport(source, "cardRadius"), undefined);
+  assert.deepEqual(findStaticTokenDeclarations(source, "localRadius"), [{ line: 2, value: "24" }]);
+  assert.deepEqual(findStaticTokenDeclarations(source, "mutableRadius"), []);
+  assert.deepEqual(findStaticTokenDeclarations("const radius = 20;\nconst radius = 24;", "radius"), [
+    { line: 1, value: "20" },
+    { line: 2, value: "24" }
+  ]);
 });
 
 test("finds only a unique static utility class occurrence", async () => {

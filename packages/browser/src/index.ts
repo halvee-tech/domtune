@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { constants } from "node:fs";
-import { access, mkdir } from "node:fs/promises";
-import { createServer } from "node:net";
+import { access, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { createConnection, createServer } from "node:net";
 import { delimiter, isAbsolute, join } from "node:path";
 import WebSocket from "ws";
 import { buildOverlayClient } from "@domtune/overlay";
@@ -14,6 +14,7 @@ export interface BrowserSessionInput {
 }
 
 export interface BrowserSession {
+  sessionId: string;
   browser: string;
   pid?: number;
   debugPort: number;
@@ -23,6 +24,8 @@ export interface BrowserSession {
 export interface BrowserSessionLauncher {
   open(input: BrowserSessionInput): Promise<BrowserSession>;
   close(sessionId: string): Promise<boolean>;
+  closeAll(): Promise<number>;
+  list(): Promise<BrowserSession[]>;
 }
 
 export interface ChromiumLauncherOptions {
@@ -32,6 +35,20 @@ export interface ChromiumLauncherOptions {
   env?: NodeJS.ProcessEnv;
   launchTimeoutMs?: number;
   spawnProcess?: typeof spawn;
+  staleProfileAgeMs?: number;
+}
+
+interface PersistedBrowserSession extends BrowserSession {
+  createdAt: string;
+  targetUrl: string;
+  workspace: string;
+}
+
+interface ActiveBrowserSession {
+  state: BrowserSession;
+  sessionRoot: string;
+  child: ChildProcess;
+  client: CdpClient;
 }
 
 interface CdpTarget {
@@ -93,28 +110,85 @@ export class ChromiumBrowserSessionLauncher implements BrowserSessionLauncher {
   private readonly env: NodeJS.ProcessEnv;
   private readonly timeoutMs: number;
   private readonly spawnProcess: typeof spawn;
-  private readonly sessions = new Map<string, { child: ChildProcess; client: CdpClient }>();
+  private readonly sessionsRoot: string;
+  private readonly staleProfileAgeMs: number;
+  private readonly sessions = new Map<string, ActiveBrowserSession>();
+  private preparePromise?: Promise<void>;
 
   constructor(private readonly options: ChromiumLauncherOptions) {
     this.platform = options.platform ?? process.platform;
     this.env = options.env ?? process.env;
     this.timeoutMs = options.launchTimeoutMs ?? 12_000;
     this.spawnProcess = options.spawnProcess ?? spawn;
+    this.sessionsRoot = join(options.dataRoot, "browser-sessions");
+    this.staleProfileAgeMs = options.staleProfileAgeMs ?? 7 * 24 * 60 * 60 * 1000;
   }
 
   async open(input: BrowserSessionInput): Promise<BrowserSession> {
     validateBrowserSessionInput(input);
+    await this.prepare();
+    await assertTargetReachable(input.targetUrl);
     await this.close(input.sessionId);
     const executable = this.options.executable ?? await findChromiumExecutable(this.platform, this.env);
     if (!executable) {
       throw new Error("DOMTune could not find Chrome, Chromium, Microsoft Edge, or Brave. Install a Chromium browser or set DOMTUNE_BROWSER_EXECUTABLE.");
     }
 
-    const sessionRoot = join(this.options.dataRoot, "browser-sessions", input.sessionId);
+    const sessionRoot = join(this.sessionsRoot, input.sessionId);
     const profileRoot = join(sessionRoot, "profile");
     await mkdir(profileRoot, { recursive: true });
-    const debugPort = await reserveLoopbackPort();
     const pageUrl = withSessionId(input.targetUrl, input.sessionId);
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        return await this.launchOnce(input, executable, sessionRoot, profileRoot, pageUrl);
+      } catch (error) {
+        lastError = error;
+        if (attempt === 0) await delay(150);
+      }
+    }
+    throw lastError;
+  }
+
+  async close(sessionId: string): Promise<boolean> {
+    await this.prepare();
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    this.sessions.delete(sessionId);
+    session.client.close();
+    await stopChild(session.child);
+    await removeSessionRoot(session.sessionRoot);
+    return true;
+  }
+
+  async closeAll(): Promise<number> {
+    await this.prepare();
+    const sessionIds = [...this.sessions.keys()];
+    await Promise.all(sessionIds.map((sessionId) => this.close(sessionId)));
+    return sessionIds.length;
+  }
+
+  async list(): Promise<BrowserSession[]> {
+    await this.prepare();
+    return [...this.sessions.values()].map((session) => ({ ...session.state }));
+  }
+
+  terminateAll(): void {
+    for (const session of this.sessions.values()) {
+      session.client.close();
+      if (session.child.exitCode === null) session.child.kill();
+    }
+    this.sessions.clear();
+  }
+
+  private async prepare(): Promise<void> {
+    this.preparePromise ??= cleanupStaleBrowserSessions(this.sessionsRoot, this.staleProfileAgeMs);
+    await this.preparePromise;
+  }
+
+  private async launchOnce(input: BrowserSessionInput, executable: string, sessionRoot: string, profileRoot: string, pageUrl: string): Promise<BrowserSession> {
+    await mkdir(profileRoot, { recursive: true });
+    const debugPort = await reserveLoopbackPort();
     const args = buildChromiumArgs({ debugPort, profileRoot, pageUrl });
     const child = this.spawnProcess(executable, args, {
       detached: false,
@@ -122,12 +196,13 @@ export class ChromiumBrowserSessionLauncher implements BrowserSessionLauncher {
       env: this.env
     });
     let spawnError: Error | undefined;
+    let client: CdpClient | undefined;
     child.once("error", (error) => { spawnError = error; });
     child.unref();
 
     try {
       const target = await waitForPageTarget(debugPort, pageUrl, this.timeoutMs, child, () => spawnError);
-      const client = await CdpClient.connect(target.webSocketDebuggerUrl!);
+      client = await CdpClient.connect(target.webSocketDebuggerUrl!);
       const source = buildOverlayClient({
         bridgeUrl: input.bridgeUrl,
         workspace: input.workspace,
@@ -138,21 +213,29 @@ export class ChromiumBrowserSessionLauncher implements BrowserSessionLauncher {
       await client.send("Runtime.enable");
       await client.send("Page.addScriptToEvaluateOnNewDocument", { source });
       await client.send("Runtime.evaluate", { expression: source, awaitPromise: true });
-      this.sessions.set(input.sessionId, { child, client });
-      return { browser: browserName(executable), pid: child.pid, debugPort, pageUrl };
+      const state = { sessionId: input.sessionId, browser: browserName(executable), pid: child.pid, debugPort, pageUrl };
+      const persisted: PersistedBrowserSession = {
+        ...state,
+        createdAt: new Date().toISOString(),
+        targetUrl: input.targetUrl,
+        workspace: input.workspace
+      };
+      await writeFile(join(sessionRoot, "session.json"), JSON.stringify(persisted, null, 2), "utf8");
+      const active = { state, sessionRoot, child, client };
+      this.sessions.set(input.sessionId, active);
+      child.once("exit", () => {
+        if (this.sessions.get(input.sessionId) !== active) return;
+        this.sessions.delete(input.sessionId);
+        client?.close();
+        void removeSessionRoot(sessionRoot);
+      });
+      return state;
     } catch (error) {
-      child.kill();
+      client?.close();
+      await stopChild(child);
+      await removeSessionRoot(sessionRoot);
       throw error;
     }
-  }
-
-  async close(sessionId: string): Promise<boolean> {
-    const session = this.sessions.get(sessionId);
-    if (!session) return false;
-    this.sessions.delete(sessionId);
-    session.client.close();
-    if (session.child.exitCode === null) session.child.kill();
-    return true;
   }
 }
 
@@ -169,6 +252,59 @@ export function isLocalDevelopmentUrl(url: URL): boolean {
   if (url.protocol !== "http:" && url.protocol !== "https:") return false;
   const hostname = url.hostname.toLowerCase();
   return hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "127.0.0.1" || hostname === "::1";
+}
+
+export async function assertTargetReachable(targetUrl: string, timeoutMs = 2_500): Promise<void> {
+  const url = new URL(targetUrl);
+  const port = url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
+  await new Promise<void>((resolve, reject) => {
+    const host = url.hostname.startsWith("[") ? url.hostname.slice(1, -1) : url.hostname;
+    const socket = createConnection({ host, port });
+    const finish = (error?: Error) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      error ? reject(error) : resolve();
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => finish());
+    socket.once("timeout", () => finish(new Error(`DOMTune could not reach ${url.origin} within ${timeoutMs}ms. Start the development server and try again.`)));
+    socket.once("error", (error) => finish(new Error(`DOMTune could not reach ${url.origin}: ${error.message}. Start the development server and try again.`)));
+  });
+}
+
+export async function cleanupStaleBrowserSessions(sessionsRoot: string, staleProfileAgeMs: number, now = Date.now()): Promise<void> {
+  await mkdir(sessionsRoot, { recursive: true });
+  const entries = await readdir(sessionsRoot, { withFileTypes: true });
+  await Promise.all(entries.filter((entry) => entry.isDirectory()).map(async (entry) => {
+    const sessionRoot = join(sessionsRoot, entry.name);
+    const sessionFile = join(sessionRoot, "session.json");
+    let persisted: PersistedBrowserSession | undefined;
+    try {
+      persisted = JSON.parse(await readFile(sessionFile, "utf8")) as PersistedBrowserSession;
+    } catch {
+      // An incomplete launch may not have written metadata.
+    }
+
+    if (persisted?.pid && isProcessRunning(persisted.pid)) {
+      if (await debugEndpointOwnsSession(persisted)) {
+        await stopProcess(persisted.pid);
+        await removeSessionRoot(sessionRoot);
+      }
+      return;
+    }
+
+    if (persisted) {
+      await removeSessionRoot(sessionRoot);
+      return;
+    }
+
+    try {
+      const details = await stat(sessionRoot);
+      if (now - details.mtimeMs >= staleProfileAgeMs) await removeSessionRoot(sessionRoot);
+    } catch {
+      // The directory may have been removed concurrently.
+    }
+  }));
 }
 
 export function buildChromiumArgs(input: { debugPort: number; profileRoot: string; pageUrl: string }): string[] {
@@ -233,6 +369,67 @@ function withSessionId(targetUrl: string, sessionId: string): string {
 
 async function assertExecutable(path: string): Promise<void> {
   await access(path, constants.X_OK);
+}
+
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function debugEndpointOwnsSession(session: PersistedBrowserSession): Promise<boolean> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${session.debugPort}/json/list`, { signal: AbortSignal.timeout(1_000) });
+    if (!response.ok) return false;
+    const targets = await response.json() as CdpTarget[];
+    return targets.some((target) => {
+      try {
+        return new URL(target.url).searchParams.get("domTuneSession") === session.sessionId;
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return false;
+  }
+}
+
+async function stopProcess(pid: number): Promise<void> {
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    return;
+  }
+  for (let attempt = 0; attempt < 15 && isProcessRunning(pid); attempt += 1) await delay(100);
+  if (!isProcessRunning(pid)) return;
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // The process exited between the checks.
+  }
+}
+
+async function stopChild(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null) return;
+  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  child.kill();
+  await Promise.race([exited, delay(1_500)]);
+  if (child.exitCode === null) child.kill("SIGKILL");
+}
+
+async function removeSessionRoot(sessionRoot: string): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await rm(sessionRoot, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (attempt === 2) throw error;
+      await delay(100 * (attempt + 1));
+    }
+  }
 }
 
 async function reserveLoopbackPort(): Promise<number> {

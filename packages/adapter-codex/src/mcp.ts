@@ -113,6 +113,28 @@ export function createDomTuneMcp(store: ChangeSetStore, baseUrl: string, browser
   );
 
   server.registerTool(
+    "list_domtune_browser_sessions",
+    {
+      title: "List DOMTune Browser Sessions",
+      description: "List active controlled-browser sessions owned by this DOMTune plugin runtime.",
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    async () => {
+      const sessions = await browserLauncher.list();
+      return {
+        structuredContent: { sessions },
+        content: [{ type: "text", text: JSON.stringify(sessions, null, 2) }]
+      };
+    }
+  );
+
+  server.registerTool(
     "close_domtune",
     {
       title: "Close DOMTune",

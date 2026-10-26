@@ -4,6 +4,12 @@ import { baseUrl, browserLauncher, startDomTuneWebServer, store } from "./server
 
 async function main(): Promise<void> {
   startDomTuneWebServer((message) => console.error(message));
+  process.once("exit", () => browserLauncher.terminateAll());
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => {
+      void browserLauncher.closeAll().finally(() => process.exit(0));
+    });
+  }
   const server = createDomTuneMcp(store, baseUrl, browserLauncher);
   const transport = new StdioServerTransport();
   await server.connect(transport);

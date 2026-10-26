@@ -76,7 +76,7 @@ http://127.0.0.1:4174/?domTuneSession=local-demo
 
 The local bridge listens on `http://127.0.0.1:47822` by default. Override it with `DOMTUNE_PORT` and pass the matching `bridgeUrl` to the Vite plugin when using a custom port.
 
-Controlled-browser mode accepts localhost targets by default and uses a dedicated browser profile per DOMTune session. Set `DOMTUNE_BROWSER_EXECUTABLE` to an absolute Chromium-family executable when automatic discovery is insufficient. Remote targets require the explicit `DOMTUNE_ALLOW_REMOTE_TARGETS=1` opt-in. Use `close_domtune` to close a session's controlled browser.
+Controlled-browser mode accepts localhost targets by default and uses a dedicated browser profile per DOMTune session. It checks that the development server is reachable before launching, supports concurrent sessions, retries one launch-time debugging-port race, and removes session profiles after normal or abnormal browser exit. On plugin startup it validates persisted session metadata before terminating confirmed orphaned DOMTune browsers. Set `DOMTUNE_BROWSER_EXECUTABLE` to an absolute Chromium-family executable when automatic discovery is insufficient. Remote targets require the explicit `DOMTUNE_ALLOW_REMOTE_TARGETS=1` opt-in. Use `list_domtune_browser_sessions` to inspect active sessions and `close_domtune` to close one.
 
 ## Codex plugin development
 

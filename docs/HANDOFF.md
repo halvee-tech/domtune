@@ -54,7 +54,7 @@ Agent-specific behavior must remain in adapters. Do not introduce Codex or Claud
 ```text
 npm install             passed, 0 vulnerabilities
 npm run build           passed
-npm test                passed, 7/7 tests
+npm test                passed, 9/9 tests
 plugin runtime startup  passed
 GET /health             passed
 MCP App panel smoke     passed
@@ -72,6 +72,8 @@ The build creates a self-contained local Codex runtime at `dist/plugin/stdio.cjs
 - The ordinary Vite fixture no longer installs the DOMTune Vite plugin.
 - Localhost targets are allowed by default; remote targets require explicit opt-in.
 - `close_domtune` closes the browser associated with a session.
+- `list_domtune_browser_sessions` reports sessions owned by the current plugin runtime.
+- Parallel sessions, unreachable targets, abnormal exits, plugin-restart orphan recovery, and profile cleanup have real-browser smoke coverage.
 
 ## Previous end-to-end baseline
 

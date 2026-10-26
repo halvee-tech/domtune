@@ -44,7 +44,7 @@ Agent-specific behavior must remain in adapters. Do not introduce Codex or Claud
 
 - Current schema version: `1`.
 - ChangeSet IDs use the `dt_` prefix.
-- DOM source hints use `data-domtune-source="path:line"` in the current fixture.
+- Explicit DOM source hints use `data-domtune-source="path:line"`; the current fixture intentionally omits the hint and exercises automatic CSS-rule mapping.
 - Default local bridge: `http://127.0.0.1:47822`.
 - `DOMTUNE_PORT` can override the bridge port; Vite `bridgeUrl` must match.
 - The old Visual Tuner PoC may still be installed and uses port `47821`.
@@ -74,6 +74,8 @@ The build creates a self-contained local Codex runtime at `dist/plugin/stdio.cjs
 - `close_domtune` closes the browser associated with a session.
 - `list_domtune_browser_sessions` reports sessions owned by the current plugin runtime.
 - Parallel sessions, unreachable targets, abnormal exits, plugin-restart orphan recovery, and profile cleanup have real-browser smoke coverage.
+- The default fixture maps `.metric-card` to `examples/vite-app/src/style.css:43` without a DOM source hint.
+- Competing CSS-rule candidates are surfaced as unresolved and cannot produce a ChangeSet.
 
 ## Previous end-to-end baseline
 
@@ -91,7 +93,7 @@ Run a fresh end-to-end test from a Codex project conversation using this reposit
 
 ## Known limitations
 
-- Source mapping still depends on an explicit `data-domtune-source` hint.
+- Automatic mapping currently covers unique, inspectable CSS rules with workspace-local development-server file metadata. CSS Modules, Tailwind, CSS-in-JS, component source, cross-origin stylesheets, and cascade resolution remain future work.
 - Only padding, corner radius, font size, and background color are exposed.
 - The Claude Code adapter is not implemented.
 - Git marketplace installs currently require a local build first; the release packaging strategy still needs to be finalized.

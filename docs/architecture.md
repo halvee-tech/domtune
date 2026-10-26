@@ -59,4 +59,4 @@ Codex conversation
 
 ## Compatibility path
 
-`open_domtune` defaults to controlled-browser mode. Its `link` mode and `@domtune/vite` remain available for project-side injection. Explicit `data-domtune-source` hints are still the current source-mapping mechanism in either mode.
+`open_domtune` defaults to controlled-browser mode. Its `link` mode and `@domtune/vite` remain available for project-side injection. Source mapping prefers an explicit `data-domtune-source` hint, then accepts a unique workspace-local CSS rule discovered through inspectable CSSOM and development-server metadata. Ambiguous mappings are not submitted.

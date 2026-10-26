@@ -5,7 +5,7 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
   <section class="hero">
     <p>Activation workspace</p>
     <h1>Move with clarity.</h1>
-    <article class="metric-card" data-domtune-source="examples/vite-app/src/style.css:43" aria-label="Activation metric card">
+    <article class="metric-card" aria-label="Activation metric card">
       <span>Activation rate</span>
       <strong>68.4%</strong>
       <small>+8.2% this week</small>

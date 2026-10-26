@@ -30,6 +30,8 @@ export interface ChangeSet {
     source: {
       file: string;
       line: number;
+      method?: "explicit" | "css-rule";
+      confidence?: "exact";
     };
   };
   changes: VisualChange[];
@@ -54,7 +56,12 @@ export const newChangeSetSchema = z.object({
   target: z.object({
     selector: z.string().min(1),
     label: z.string().min(1),
-    source: z.object({ file: z.string().min(1), line: z.number().int().positive() })
+    source: z.object({
+      file: z.string().min(1),
+      line: z.number().int().positive(),
+      method: z.enum(["explicit", "css-rule"]).optional(),
+      confidence: z.literal("exact").optional()
+    })
   }),
   changes: z.array(
     z.object({ property: z.string().min(1), before: z.string(), after: z.string() })

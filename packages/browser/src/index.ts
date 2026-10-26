@@ -212,7 +212,10 @@ export class ChromiumBrowserSessionLauncher implements BrowserSessionLauncher {
       await client.send("Page.enable");
       await client.send("Runtime.enable");
       await client.send("Page.addScriptToEvaluateOnNewDocument", { source });
-      await client.send("Runtime.evaluate", { expression: source, awaitPromise: true });
+      const evaluation = await client.send("Runtime.evaluate", { expression: source, awaitPromise: true }) as { exceptionDetails?: { text?: string; exception?: { description?: string } } };
+      if (evaluation.exceptionDetails) {
+        throw new Error(`DOMTune overlay injection failed: ${evaluation.exceptionDetails.exception?.description ?? evaluation.exceptionDetails.text ?? "unknown page error"}`);
+      }
       const state = { sessionId: input.sessionId, browser: browserName(executable), pid: child.pid, debugPort, pageUrl };
       const persisted: PersistedBrowserSession = {
         ...state,

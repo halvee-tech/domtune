@@ -19,7 +19,12 @@ interface ChangeSet {
   target: {
     selector: string;
     label: string;
-    source: { file: string; line: number };
+    source: {
+      file: string;
+      line: number;
+      method?: "explicit" | "css-rule";
+      confidence?: "exact";
+    };
   };
   changes: Array<{
     property: string;
@@ -42,3 +47,4 @@ interface ChangeSet {
 4. `changes` records visual intent. It does not prescribe whether the implementation should update CSS, a token, a utility class, or a component prop.
 5. An adapter may notify a conversation only once for a given ChangeSet.
 6. Applying a ChangeSet must end with an `applied` or `failed` report containing verification evidence.
+7. `source.method` records whether the producer used an explicit source hint or a unique matching CSS rule. Producers must not mark ambiguous candidates as `exact`.

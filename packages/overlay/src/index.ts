@@ -103,11 +103,103 @@ export function buildOverlayClient(config: OverlayClientConfig): string {
       return path.join(" > ");
     }
 
-    function sourceFor(element) {
+    function explicitSourceFor(element) {
       const sourceNode = element.closest("[data-domtune-source]");
-      const value = sourceNode?.getAttribute("data-domtune-source") || "unknown:1";
+      const value = sourceNode?.getAttribute("data-domtune-source");
+      if (!value) return null;
       const separator = value.lastIndexOf(":");
-      return { file: value.slice(0, separator) || "unknown", line: Number(value.slice(separator + 1)) || 1 };
+      if (separator < 1) return null;
+      const file = normalizeWorkspaceFile(value.slice(0, separator));
+      const line = Number(value.slice(separator + 1));
+      if (!file || !Number.isInteger(line) || line < 1) return null;
+      return { file, line, method: "explicit", confidence: "exact" };
+    }
+
+    function normalizeWorkspaceFile(value) {
+      let file = decodeURIComponent(String(value || "")).replaceAll("\\\\", "/");
+      if (file.startsWith("file://")) {
+        try { file = decodeURIComponent(new URL(file).pathname); } catch { return null; }
+      }
+      if (file.startsWith("/@fs/")) file = file.slice(4);
+      let workspace = String(config.workspace || "").replaceAll("\\\\", "/");
+      if (workspace.endsWith("/")) workspace = workspace.slice(0, -1);
+      const windowsAbsolute = file.length > 2 && /[A-Za-z]/.test(file[0]) && file[1] === ":" && file[2] === "/";
+      const absolute = file.startsWith("/") || windowsAbsolute;
+      if (!absolute) return file.startsWith("./") ? file.slice(2) : file;
+      if (file === workspace) return ".";
+      if (!workspace || !file.startsWith(workspace + "/")) return null;
+      return file.slice(workspace.length + 1);
+    }
+
+    function sourceFileForSheet(sheet) {
+      const owner = sheet.ownerNode;
+      const hinted = owner?.getAttribute?.("data-vite-dev-id") || owner?.getAttribute?.("data-domtune-source-file");
+      if (hinted) return normalizeWorkspaceFile(hinted);
+      if (!sheet.href) return null;
+      try {
+        const url = new URL(sheet.href, location.href);
+        return normalizeWorkspaceFile(url.pathname);
+      } catch {
+        return null;
+      }
+    }
+
+    function lineForSelector(text, selector) {
+      if (!text || !selector) return null;
+      let offset = 0;
+      let found = null;
+      while (offset < text.length) {
+        const index = text.indexOf(selector, offset);
+        if (index < 0) return found;
+        const next = text.slice(index + selector.length).trimStart()[0];
+        if (next === "{" || next === ",") {
+          if (found !== null) return null;
+          found = text.slice(0, index).split("\\n").length;
+        }
+        offset = index + selector.length;
+      }
+      return found;
+    }
+
+    function ruleDeclares(rule, property) {
+      if (rule.style.getPropertyValue(property)) return true;
+      if (property === "background-color" && rule.style.getPropertyValue("background")) return true;
+      return false;
+    }
+
+    function matchingRules(element, properties) {
+      const matches = [];
+      function visit(rules, sheet) {
+        for (const rule of rules) {
+          if (rule.type === 1 && rule.selectorText) {
+            let selected = false;
+            try { selected = element.matches(rule.selectorText); } catch { selected = false; }
+            if (!selected || !properties.some((property) => ruleDeclares(rule, property))) continue;
+            const file = sourceFileForSheet(sheet);
+            const text = sheet.ownerNode?.textContent || "";
+            const line = lineForSelector(text, rule.selectorText);
+            if (file && line) matches.push({ file, line, selector: rule.selectorText, method: "css-rule", confidence: "exact" });
+            continue;
+          }
+          if (!rule.cssRules) continue;
+          if (rule.conditionText && typeof matchMedia === "function" && !matchMedia(rule.conditionText).matches) continue;
+          visit(rule.cssRules, sheet);
+        }
+      }
+      for (const sheet of document.styleSheets) {
+        try { visit(sheet.cssRules, sheet); } catch { /* Cross-origin stylesheets are not inspectable. */ }
+      }
+      return matches;
+    }
+
+    function sourceFor(element, properties) {
+      const explicit = explicitSourceFor(element);
+      if (explicit) return explicit;
+      const unique = new Map();
+      for (const candidate of matchingRules(element, properties)) unique.set(candidate.file + ":" + candidate.line + ":" + candidate.selector, candidate);
+      if (unique.size !== 1) return null;
+      const candidate = [...unique.values()][0];
+      return { file: candidate.file, line: candidate.line, method: candidate.method, confidence: candidate.confidence };
     }
 
     function clearHover() {
@@ -134,9 +226,11 @@ export function buildOverlayClient(config: OverlayClientConfig): string {
       controls.color.value = rgbToHex(style.backgroundColor);
       controlsEl.hidden = false;
       sendButton.disabled = !sessionId;
-      targetEl.textContent = selectorFor(element) + " · " + sourceFor(element).file + ":" + sourceFor(element).line;
+      const source = sourceFor(element, ["padding", "border-radius", "font-size", "background-color"]);
+      targetEl.textContent = selectorFor(element) + (source ? " · " + (source.method === "css-rule" ? "auto " : "") + source.file + ":" + source.line : " · source pending");
       selectButton.textContent = "Select another";
       updateOutputs();
+      return source;
     }
 
     function updateOutputs() {
@@ -179,8 +273,10 @@ export function buildOverlayClient(config: OverlayClientConfig): string {
       event.preventDefault();
       event.stopPropagation();
       armed = false;
-      selectElement(event.target.closest("[data-domtune-source]") || event.target);
-      feedbackEl.textContent = "Element selected. Adjust values, then send it to your agent.";
+      const source = selectElement(event.target.closest("[data-domtune-source]") || event.target);
+      feedbackEl.textContent = source
+        ? (source.method === "css-rule" ? "Element selected. Source mapped automatically." : "Element selected. Source hint verified.")
+        : "Element selected. Adjust a value; DOMTune will resolve its CSS rule before sending.";
     }, true);
 
     document.addEventListener("keydown", (event) => {
@@ -211,6 +307,12 @@ export function buildOverlayClient(config: OverlayClientConfig): string {
         feedbackEl.classList.add("vt-error");
         return;
       }
+      const source = sourceFor(selected, changes.map((change) => change.property));
+      if (!source) {
+        feedbackEl.textContent = "Could not map these changes to one source rule. Adjust one property or add a source hint.";
+        feedbackEl.classList.add("vt-error");
+        return;
+      }
       sendButton.disabled = true;
       sendButton.textContent = "Sending…";
       feedbackEl.classList.remove("vt-error");
@@ -224,7 +326,7 @@ export function buildOverlayClient(config: OverlayClientConfig): string {
             workspace: config.workspace,
             pageUrl: location.href,
             viewport: { width: innerWidth, height: innerHeight },
-            target: { selector: selectorFor(selected), label: selected.getAttribute("aria-label") || selected.tagName.toLowerCase(), source: sourceFor(selected) },
+            target: { selector: selectorFor(selected), label: selected.getAttribute("aria-label") || selected.tagName.toLowerCase(), source },
             changes
           })
         });

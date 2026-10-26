@@ -14,12 +14,17 @@ test("creates, lists, and reports a ChangeSet", async () => {
     workspace: directory,
     pageUrl: "http://localhost/demo",
     viewport: { width: 375, height: 812 },
-    target: { selector: ".card", label: "Card", source: { file: "styles.css", line: 1 } },
+    target: {
+      selector: ".card",
+      label: "Card",
+      source: { file: "styles.css", line: 1, method: "css-rule", confidence: "exact" }
+    },
     changes: [{ property: "padding", before: "24px", after: "20px" }]
   });
 
   assert.equal(created.schemaVersion, 1);
   assert.match(created.id, /^dt_/);
+  assert.equal(created.target.source.method, "css-rule");
   assert.equal((await store.list("session-1"))[0]?.status, "pending");
 
   const notified = await store.markConversationNotified(created.id);

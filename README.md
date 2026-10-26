@@ -8,14 +8,17 @@ DOMTune lets a user adjust a real frontend visually and send a source-mapped Cha
 
 This repository contains the first engineering migration of the validated DOMTune proof of concept. The current vertical slice supports:
 
-- a Vite-injected Shadow DOM overlay;
+- a controlled-browser-injected Shadow DOM overlay, with optional Vite compatibility injection;
 - element selection and live adjustment of padding, corner radius, font size, and surface color;
 - versioned, persistent ChangeSets;
 - a local HTTP bridge and stdio MCP server;
 - a Codex MCP App bridge that can continue the originating conversation;
 - an agent skill for applying a ChangeSet to source code.
+- exact source mapping for unique CSS rules exposed by supported development servers, with explicit hints as a fallback.
 
 The default Codex flow now launches an isolated Chromium window and injects the overlay through the Chrome DevTools Protocol, so target projects do not need DOMTune in their Vite configuration. The Claude Code adapter is still planned.
+
+For source mapping, DOMTune first honors `data-domtune-source`. Without a hint, it inspects matching CSS rules and accepts only one workspace-local rule that declares the changed property. Ambiguous or uninspectable styles are blocked instead of being reported as an exact source. See [Source mapping](docs/source-mapping.md).
 
 ## Architecture
 

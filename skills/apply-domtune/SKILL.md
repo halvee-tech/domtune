@@ -10,7 +10,7 @@ Use the DOMTune MCP tools to retrieve the requested ChangeSet. Treat captured va
 ## Workflow
 
 1. Call `get_domtune_change_set` with the exact ChangeSet ID from the user message. If the user explicitly requests the latest pending set, call `list_domtune_change_sets` and select only the latest pending item.
-2. Verify that `schemaVersion` is supported and the mapped source file belongs to the current workspace. Treat `source.method: css-rule` with `source.confidence: exact` as a unique CSS-rule candidate, not proof that a token, utility, or component prop is irrelevant. Stop if the path points outside the workspace or nearby source contradicts the mapping.
+2. Verify that `schemaVersion` is supported and the mapped source file belongs to the current workspace. Treat `source.method: css-rule` or `source.method: source-map` with `source.confidence: exact` as a unique style-rule candidate, not proof that a token, utility, or component prop is irrelevant. Stop if the path points outside the workspace or nearby source contradicts the mapping.
 3. Inspect nearby components, styles, responsive rules, and design tokens. Prefer existing tokens and utilities over new magic values.
 4. Apply the smallest maintainable change that preserves unaffected viewports, states, and component instances.
 5. Run proportionate formatting, type checks, and relevant tests. When a preview command is available, verify the affected viewport.

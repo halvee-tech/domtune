@@ -44,7 +44,7 @@ Agent-specific behavior must remain in adapters. Do not introduce Codex or Claud
 
 - Current schema version: `1`.
 - ChangeSet IDs use the `dt_` prefix.
-- Explicit DOM source hints use `data-domtune-source="path:line"`; the current fixture intentionally omits the hint and exercises automatic CSS-rule mapping.
+- Explicit DOM source hints use `data-domtune-source="path:line"`; the current fixture intentionally omits the hint and exercises automatic CSS-rule and CSS source-map resolution.
 - Default local bridge: `http://127.0.0.1:47822`.
 - `DOMTUNE_PORT` can override the bridge port; Vite `bridgeUrl` must match.
 - The old Visual Tuner PoC may still be installed and uses port `47821`.
@@ -54,12 +54,13 @@ Agent-specific behavior must remain in adapters. Do not introduce Codex or Claud
 ```text
 npm install             passed, 0 vulnerabilities
 npm run build           passed
-npm test                passed, 9/9 tests
+npm test                passed, 10/10 tests
 plugin runtime startup  passed
 GET /health             passed
 MCP App panel smoke     passed
 controlled injection    passed without the Vite plugin
 reload reinjection      passed, exactly one overlay
+CSS Module source map   passed end to end in controlled-browser mode
 ```
 
 The build creates a self-contained local Codex runtime at `dist/plugin/stdio.cjs`. Build output and dependencies are intentionally ignored by Git.
@@ -75,6 +76,7 @@ The build creates a self-contained local Codex runtime at `dist/plugin/stdio.cjs
 - `list_domtune_browser_sessions` reports sessions owned by the current plugin runtime.
 - Parallel sessions, unreachable targets, abnormal exits, plugin-restart orphan recovery, and profile cleanup have real-browser smoke coverage.
 - The default fixture maps `.metric-card` to `examples/vite-app/src/style.css:43` without a DOM source hint.
+- The CSS Module fixture maps its hashed runtime class to `examples/vite-app/src/metric.module.css:1` when Vite development source maps are enabled.
 - Competing CSS-rule candidates are surfaced as unresolved and cannot produce a ChangeSet.
 
 ## Previous end-to-end baseline
@@ -93,7 +95,7 @@ Run a fresh end-to-end test from a Codex project conversation using this reposit
 
 ## Known limitations
 
-- Automatic mapping currently covers unique, inspectable CSS rules with workspace-local development-server file metadata. CSS Modules, Tailwind, CSS-in-JS, component source, cross-origin stylesheets, and cascade resolution remain future work.
+- Automatic mapping currently covers unique, inspectable CSS rules and CSS Modules with development source maps. Tailwind, CSS-in-JS, component source, cross-origin stylesheets, and cascade resolution remain future work.
 - Only padding, corner radius, font size, and background color are exposed.
 - The Claude Code adapter is not implemented.
 - Git marketplace installs currently require a local build first; the release packaging strategy still needs to be finalized.

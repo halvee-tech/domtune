@@ -73,6 +73,7 @@ export function buildOverlayClient(config: OverlayClientConfig): string {
     let armed = false;
     let hovered = null;
     let selected = null;
+    let selectedToken = "";
     let baseline = null;
     const touched = new Set();
     let previousOutline = "";
@@ -202,6 +203,23 @@ export function buildOverlayClient(config: OverlayClientConfig): string {
       return { file: candidate.file, line: candidate.line, method: candidate.method, confidence: candidate.confidence };
     }
 
+    async function controlledBrowserSource(properties) {
+      if (!selectedToken) return null;
+      try {
+        const response = await fetch(config.bridgeUrl + "/api/source-map", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ sessionId, targetToken: selectedToken, properties })
+        });
+        const result = await response.json();
+        if (response.status === 404 && result.reason === "session-not-found") return null;
+        if (!response.ok && response.status !== 404) throw new Error(result.error || ("HTTP " + response.status));
+        return result;
+      } catch {
+        return null;
+      }
+    }
+
     function clearHover() {
       if (!hovered || hovered === selected) return;
       hovered.style.outline = previousOutline;
@@ -211,7 +229,10 @@ export function buildOverlayClient(config: OverlayClientConfig): string {
 
     function selectElement(element) {
       clearHover();
+      if (selected && selected !== element) selected.removeAttribute("data-domtune-target");
       selected = element;
+      selectedToken = sessionId.replace(/[^A-Za-z0-9_-]/g, "") + "_" + Date.now().toString(36);
+      selected.setAttribute("data-domtune-target", selectedToken);
       const style = getComputedStyle(element);
       baseline = {
         padding: style.padding,
@@ -307,15 +328,23 @@ export function buildOverlayClient(config: OverlayClientConfig): string {
         feedbackEl.classList.add("vt-error");
         return;
       }
-      const source = sourceFor(selected, changes.map((change) => change.property));
+      sendButton.disabled = true;
+      sendButton.textContent = "Mapping…";
+      feedbackEl.classList.remove("vt-error");
+      const properties = changes.map((change) => change.property);
+      const explicit = explicitSourceFor(selected);
+      const controlled = explicit ? null : await controlledBrowserSource(properties);
+      const source = explicit || controlled?.source || (controlled ? null : sourceFor(selected, properties));
       if (!source) {
-        feedbackEl.textContent = "Could not map these changes to one source rule. Adjust one property or add a source hint.";
+        sendButton.disabled = false;
+        sendButton.textContent = "Send to Agent";
+        feedbackEl.textContent = controlled?.reason === "ambiguous"
+          ? "Multiple source rules match this change. Adjust one property or add a source hint."
+          : "Could not map these changes to one source rule. Adjust one property or add a source hint.";
         feedbackEl.classList.add("vt-error");
         return;
       }
-      sendButton.disabled = true;
       sendButton.textContent = "Sending…";
-      feedbackEl.classList.remove("vt-error");
       try {
         const response = await fetch(config.bridgeUrl + "/api/change-sets", {
           method: "POST",

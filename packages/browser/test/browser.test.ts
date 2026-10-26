@@ -4,7 +4,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { assertTargetReachable, buildChromiumArgs, chromiumCandidates, cleanupStaleBrowserSessions, isLocalDevelopmentUrl, validateBrowserSessionInput } from "../src/index.js";
+import { assertTargetReachable, buildChromiumArgs, chromiumCandidates, cleanupStaleBrowserSessions, isLocalDevelopmentUrl, resolveSourceMapPosition, validateBrowserSessionInput } from "../src/index.js";
 
 test("recognizes loopback development targets", () => {
   assert.equal(isLocalDevelopmentUrl(new URL("http://127.0.0.1:4174/")), true);
@@ -38,6 +38,32 @@ test("lists supported macOS Chromium browsers", () => {
   const candidates = chromiumCandidates("darwin", {});
   assert.ok(candidates.some((candidate) => candidate.includes("Google Chrome.app")));
   assert.ok(candidates.some((candidate) => candidate.includes("Microsoft Edge.app")));
+});
+
+test("maps generated CSS positions to workspace-local original sources", () => {
+  const workspace = "/workspace";
+  const mapped = resolveSourceMapPosition({
+    version: 3,
+    file: "generated.css",
+    names: [],
+    sources: ["/workspace/src/card.module.css"],
+    sourcesContent: [".card { border-radius: 12px; }"],
+    mappings: "AAAA"
+  }, { line: 1, column: 0 }, workspace);
+
+  assert.deepEqual(mapped, {
+    file: "src/card.module.css",
+    line: 1,
+    method: "source-map",
+    confidence: "exact"
+  });
+  assert.equal(resolveSourceMapPosition({
+    version: 3,
+    file: "generated.css",
+    names: [],
+    sources: ["/outside/card.css"],
+    mappings: "AAAA"
+  }, { line: 1, column: 0 }, workspace), undefined);
 });
 
 test("checks that the target development server is reachable", async () => {

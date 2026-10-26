@@ -22,7 +22,7 @@ DOMTune separates browser interaction, data transport, and coding-agent integrat
 
 ### Controlled browser
 
-`@domtune/browser` owns the agent-neutral browser-session interface, Chromium discovery, isolated profiles, Chrome DevTools Protocol injection, and lifecycle recovery. It depends on `@domtune/overlay`, but does not know about MCP or Codex. The current implementation keeps its CDP connection open so injection survives target-page reloads, persists enough metadata to clean confirmed orphaned sessions after a plugin restart, and removes profiles after normal or abnormal exit.
+`@domtune/browser` owns the agent-neutral browser-session interface, Chromium discovery, isolated profiles, Chrome DevTools Protocol injection, matched-style and source-map resolution, and lifecycle recovery. It depends on `@domtune/overlay`, but does not know about MCP or Codex. The current implementation keeps its CDP connection open so injection survives target-page reloads, persists enough metadata to clean confirmed orphaned sessions after a plugin restart, and removes profiles after normal or abnormal exit.
 
 ### Agent adapters
 
@@ -59,4 +59,4 @@ Codex conversation
 
 ## Compatibility path
 
-`open_domtune` defaults to controlled-browser mode. Its `link` mode and `@domtune/vite` remain available for project-side injection. Source mapping prefers an explicit `data-domtune-source` hint, then accepts a unique workspace-local CSS rule discovered through inspectable CSSOM and development-server metadata. Ambiguous mappings are not submitted.
+`open_domtune` defaults to controlled-browser mode. Its `link` mode and `@domtune/vite` remain available for project-side injection. Source mapping prefers an explicit `data-domtune-source` hint, then a unique workspace-local source-map position, then a text-equivalent workspace CSS rule discovered through development-server metadata. Ambiguous mappings are not submitted.

@@ -1,0 +1,27 @@
+.moduleCard {
+  width: min(480px, 100%);
+  margin-top: 24px;
+  padding: 28px;
+  border-radius: 22px;
+  background: #e8efe7;
+  box-shadow: 0 20px 54px rgb(25 44 34 / 10%);
+}
+
+.moduleCard span {
+  color: #66736b;
+  font: 700 11px/1 ui-monospace, monospace;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.moduleCard strong {
+  display: block;
+  margin: 18px 0 4px;
+  font-size: 56px;
+  letter-spacing: -.05em;
+}
+
+.moduleCard small {
+  color: #1d7a4b;
+  font-weight: 750;
+}

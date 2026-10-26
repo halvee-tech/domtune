@@ -2,7 +2,9 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { constants } from "node:fs";
 import { access, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createConnection, createServer } from "node:net";
-import { delimiter, isAbsolute, join } from "node:path";
+import { delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+import { SourceMapConsumer, type RawSourceMap } from "source-map-js";
 import WebSocket from "ws";
 import { buildOverlayClient } from "@domtune/overlay";
 
@@ -26,6 +28,24 @@ export interface BrowserSessionLauncher {
   close(sessionId: string): Promise<boolean>;
   closeAll(): Promise<number>;
   list(): Promise<BrowserSession[]>;
+  resolveSource(input: BrowserSourceRequest): Promise<BrowserSourceResult>;
+}
+
+export interface BrowserSourceRequest {
+  sessionId: string;
+  targetToken: string;
+  properties: string[];
+}
+
+export interface BrowserSourceResult {
+  source?: {
+    file: string;
+    line: number;
+    method: "source-map" | "css-rule";
+    confidence: "exact";
+  };
+  reason?: "session-not-found" | "target-not-found" | "source-unavailable" | "ambiguous";
+  candidateCount: number;
 }
 
 export interface ChromiumLauncherOptions {
@@ -49,6 +69,30 @@ interface ActiveBrowserSession {
   sessionRoot: string;
   child: ChildProcess;
   client: CdpClient;
+  input: BrowserSessionInput;
+  styleSheets: Map<string, CdpStyleSheetHeader>;
+}
+
+interface CdpStyleSheetHeader {
+  styleSheetId: string;
+  sourceURL?: string;
+  sourceMapURL?: string;
+  ownerNode?: number;
+}
+
+interface CdpSourceRange {
+  startLine: number;
+  startColumn: number;
+  endLine: number;
+  endColumn: number;
+}
+
+interface CdpCssProperty {
+  name: string;
+  value?: string;
+  disabled?: boolean;
+  implicit?: boolean;
+  parsedOk?: boolean;
 }
 
 interface CdpTarget {
@@ -65,10 +109,15 @@ interface PendingCommand {
 class CdpClient {
   private nextId = 1;
   private readonly pending = new Map<number, PendingCommand>();
+  private readonly eventHandlers = new Map<string, Set<(params: unknown) => void>>();
 
   private constructor(private readonly socket: WebSocket) {
     socket.on("message", (data) => {
-      const message = JSON.parse(data.toString()) as { id?: number; result?: unknown; error?: { message?: string } };
+      const message = JSON.parse(data.toString()) as { id?: number; method?: string; params?: unknown; result?: unknown; error?: { message?: string } };
+      if (message.method) {
+        for (const handler of this.eventHandlers.get(message.method) ?? []) handler(message.params);
+        return;
+      }
       if (!message.id) return;
       const command = this.pending.get(message.id);
       if (!command) return;
@@ -97,6 +146,13 @@ class CdpClient {
 
   close(): void {
     this.socket.close();
+  }
+
+  on(method: string, handler: (params: unknown) => void): () => void {
+    const handlers = this.eventHandlers.get(method) ?? new Set();
+    handlers.add(handler);
+    this.eventHandlers.set(method, handlers);
+    return () => handlers.delete(handler);
   }
 
   private rejectPending(error: Error): void {
@@ -173,6 +229,47 @@ export class ChromiumBrowserSessionLauncher implements BrowserSessionLauncher {
     return [...this.sessions.values()].map((session) => ({ ...session.state }));
   }
 
+  async resolveSource(input: BrowserSourceRequest): Promise<BrowserSourceResult> {
+    await this.prepare();
+    const session = this.sessions.get(input.sessionId);
+    if (!session) return { reason: "session-not-found", candidateCount: 0 };
+    if (!/^[A-Za-z0-9_-]+$/.test(input.targetToken)) return { reason: "target-not-found", candidateCount: 0 };
+
+    const documentResult = await session.client.send("DOM.getDocument", { depth: 0, pierce: true }) as { root: { nodeId: number } };
+    const queryResult = await session.client.send("DOM.querySelector", {
+      nodeId: documentResult.root.nodeId,
+      selector: `[data-domtune-target="${input.targetToken}"]`
+    }) as { nodeId: number };
+    if (!queryResult.nodeId) return { reason: "target-not-found", candidateCount: 0 };
+
+    const matched = await session.client.send("CSS.getMatchedStylesForNode", { nodeId: queryResult.nodeId }) as {
+      matchedCSSRules?: Array<{
+        rule: {
+          styleSheetId?: string;
+          selectorList?: { text?: string; range?: CdpSourceRange };
+          style?: { range?: CdpSourceRange; cssProperties?: CdpCssProperty[] };
+        };
+      }>;
+    };
+    const candidates = new Map<string, BrowserSourceResult["source"]>();
+    for (const match of matched.matchedCSSRules ?? []) {
+      const rule = match.rule;
+      if (!rule.styleSheetId || !ruleDeclaresAny(rule.style?.cssProperties ?? [], input.properties)) continue;
+      const header = session.styleSheets.get(rule.styleSheetId);
+      if (!header) continue;
+      const range = rule.selectorList?.range ?? rule.style?.range;
+      if (!range) continue;
+      const source = await resolveCdpRuleSource(session, header, range);
+      if (!source) continue;
+      const key = `${source.file}:${source.line}:${rule.selectorList?.text ?? ""}`;
+      candidates.set(key, source);
+    }
+
+    if (candidates.size === 1) return { source: [...candidates.values()][0], candidateCount: 1 };
+    if (candidates.size > 1) return { reason: "ambiguous", candidateCount: candidates.size };
+    return { reason: "source-unavailable", candidateCount: 0 };
+  }
+
   terminateAll(): void {
     for (const session of this.sessions.values()) {
       session.client.close();
@@ -203,6 +300,14 @@ export class ChromiumBrowserSessionLauncher implements BrowserSessionLauncher {
     try {
       const target = await waitForPageTarget(debugPort, pageUrl, this.timeoutMs, child, () => spawnError);
       client = await CdpClient.connect(target.webSocketDebuggerUrl!);
+      const styleSheets = new Map<string, CdpStyleSheetHeader>();
+      client.on("CSS.styleSheetAdded", (params) => {
+        const header = (params as { header: CdpStyleSheetHeader }).header;
+        styleSheets.set(header.styleSheetId, header);
+      });
+      client.on("CSS.styleSheetRemoved", (params) => {
+        styleSheets.delete((params as { styleSheetId: string }).styleSheetId);
+      });
       const source = buildOverlayClient({
         bridgeUrl: input.bridgeUrl,
         workspace: input.workspace,
@@ -211,6 +316,8 @@ export class ChromiumBrowserSessionLauncher implements BrowserSessionLauncher {
       });
       await client.send("Page.enable");
       await client.send("Runtime.enable");
+      await client.send("DOM.enable");
+      await client.send("CSS.enable");
       await client.send("Page.addScriptToEvaluateOnNewDocument", { source });
       const evaluation = await client.send("Runtime.evaluate", { expression: source, awaitPromise: true }) as { exceptionDetails?: { text?: string; exception?: { description?: string } } };
       if (evaluation.exceptionDetails) {
@@ -224,7 +331,7 @@ export class ChromiumBrowserSessionLauncher implements BrowserSessionLauncher {
         workspace: input.workspace
       };
       await writeFile(join(sessionRoot, "session.json"), JSON.stringify(persisted, null, 2), "utf8");
-      const active = { state, sessionRoot, child, client };
+      const active = { state, sessionRoot, child, client, input, styleSheets };
       this.sessions.set(input.sessionId, active);
       child.once("exit", () => {
         if (this.sessions.get(input.sessionId) !== active) return;
@@ -240,6 +347,114 @@ export class ChromiumBrowserSessionLauncher implements BrowserSessionLauncher {
       throw error;
     }
   }
+}
+
+function ruleDeclaresAny(properties: CdpCssProperty[], requested: string[]): boolean {
+  return properties.some((property) => {
+    if (property.disabled || property.parsedOk === false || !property.value) return false;
+    if (requested.includes(property.name)) return true;
+    return requested.includes("background-color") && property.name === "background";
+  });
+}
+
+async function resolveCdpRuleSource(session: ActiveBrowserSession, header: CdpStyleSheetHeader, range: CdpSourceRange): Promise<BrowserSourceResult["source"] | undefined> {
+  if (header.sourceMapURL) {
+    const rawMap = await loadSourceMap(header.sourceMapURL, header.sourceURL || session.state.pageUrl);
+    if (rawMap) {
+      const source = resolveSourceMapPosition(rawMap, {
+        line: range.startLine + 1,
+        column: range.startColumn
+      }, session.input.workspace);
+      if (source) {
+        try {
+          await access(resolve(session.input.workspace, source.file));
+          return source;
+        } catch {
+          // A source map cannot establish an exact target when its original file is absent.
+        }
+      }
+    }
+  }
+
+  const ownerFile = await styleSheetOwnerFile(session.client, header);
+  const file = ownerFile ? toWorkspaceFile(ownerFile, session.input.workspace) : undefined;
+  if (!file) return undefined;
+  try {
+    const [{ text }, sourceText] = await Promise.all([
+      session.client.send("CSS.getStyleSheetText", { styleSheetId: header.styleSheetId }) as Promise<{ text: string }>,
+      readFile(resolve(session.input.workspace, file), "utf8")
+    ]);
+    if (normalizeNewlines(text) !== normalizeNewlines(sourceText)) return undefined;
+    return { file, line: range.startLine + 1, method: "css-rule", confidence: "exact" };
+  } catch {
+    return undefined;
+  }
+}
+
+export function resolveSourceMapPosition(
+  rawMap: RawSourceMap,
+  generated: { line: number; column: number },
+  workspace: string
+): BrowserSourceResult["source"] | undefined {
+  try {
+    const consumer = new SourceMapConsumer(rawMap);
+    const original = consumer.originalPositionFor(generated);
+    const file = original.source ? toWorkspaceFile(original.source, workspace) : undefined;
+    if (!file || !original.line) return undefined;
+    return { file, line: original.line, method: "source-map", confidence: "exact" };
+  } catch {
+    return undefined;
+  }
+}
+
+async function loadSourceMap(sourceMapUrl: string, baseUrl: string): Promise<RawSourceMap | undefined> {
+  try {
+    if (sourceMapUrl.startsWith("data:")) {
+      const comma = sourceMapUrl.indexOf(",");
+      if (comma < 0) return undefined;
+      const metadata = sourceMapUrl.slice(0, comma);
+      const payload = sourceMapUrl.slice(comma + 1);
+      const json = metadata.includes(";base64") ? Buffer.from(payload, "base64").toString("utf8") : decodeURIComponent(payload);
+      return JSON.parse(json) as RawSourceMap;
+    }
+    const response = await fetch(new URL(sourceMapUrl, baseUrl));
+    if (!response.ok) return undefined;
+    return await response.json() as RawSourceMap;
+  } catch {
+    return undefined;
+  }
+}
+
+async function styleSheetOwnerFile(client: CdpClient, header: CdpStyleSheetHeader): Promise<string | undefined> {
+  if (!header.ownerNode) return undefined;
+  try {
+    const result = await client.send("DOM.describeNode", { backendNodeId: header.ownerNode, depth: 0 }) as { node: { attributes?: string[] } };
+    const attributes = result.node.attributes ?? [];
+    for (let index = 0; index < attributes.length; index += 2) {
+      if (attributes[index] === "data-vite-dev-id" || attributes[index] === "data-domtune-source-file") return attributes[index + 1];
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function toWorkspaceFile(value: string, workspace: string): string | undefined {
+  let candidate = decodeURIComponent(value).replaceAll("\\", "/");
+  if (candidate.startsWith("file://")) {
+    try { candidate = fileURLToPath(candidate); } catch { return undefined; }
+  }
+  if (candidate.startsWith("/@fs/")) candidate = candidate.slice(4);
+  if (/^[a-z]+:\/\//i.test(candidate)) return undefined;
+  const absolute = isAbsolute(candidate) ? candidate : resolve(workspace, candidate);
+  const relativePath = relative(resolve(workspace), resolve(absolute));
+  if (!relativePath) return ".";
+  if (relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) return undefined;
+  return relativePath.replaceAll("\\", "/");
+}
+
+function normalizeNewlines(value: string): string {
+  return value.replaceAll("\r\n", "\n").trim();
 }
 
 export function validateBrowserSessionInput(input: BrowserSessionInput): void {

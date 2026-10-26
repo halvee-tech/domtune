@@ -199,7 +199,7 @@ export function createDomTuneMcp(store: ChangeSetStore, baseUrl: string, browser
           source: z.object({
             file: z.string().min(1),
             line: z.number().int().positive(),
-            method: z.enum(["explicit", "css-rule"]).optional(),
+            method: z.enum(["explicit", "css-rule", "source-map"]).optional(),
             confidence: z.literal("exact").optional()
           })
         }),

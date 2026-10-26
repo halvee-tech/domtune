@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { NextFunction, Request, Response } from "express";
+import { z } from "zod";
 import { newChangeSetSchema } from "@domtune/core";
 import { ChangeSetStore } from "@domtune/transport";
 import { ChromiumBrowserSessionLauncher } from "@domtune/browser";
@@ -17,6 +18,11 @@ export const dataRoot = resolve(process.env.PLUGIN_DATA ?? projectRoot);
 export const store = new ChangeSetStore(resolve(dataRoot, ".domtune/change-sets.json"));
 export const browserLauncher = new ChromiumBrowserSessionLauncher({ dataRoot });
 const app = createMcpExpressApp({ host });
+const browserSourceRequestSchema = z.object({
+  sessionId: z.string().min(1),
+  targetToken: z.string().regex(/^[A-Za-z0-9_-]+$/),
+  properties: z.array(z.enum(["padding", "border-radius", "font-size", "background-color"])).min(1)
+});
 
 app.use((req: Request, res: Response, next: NextFunction) => {
   res.setHeader("access-control-allow-origin", "*");
@@ -63,8 +69,16 @@ app.post("/api/change-sets", async (req: Request, res: Response) => {
   res.status(201).json(item);
 });
 
+app.post("/api/source-map", async (req: Request, res: Response) => {
+  const parsed = browserSourceRequestSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.message });
+  const result = await browserLauncher.resolveSource(parsed.data);
+  if (result.reason === "session-not-found" || result.reason === "target-not-found") return res.status(404).json(result);
+  res.json(result);
+});
+
 app.post("/mcp", async (req: Request, res: Response) => {
-    const server = createDomTuneMcp(store, baseUrl, browserLauncher);
+  const server = createDomTuneMcp(store, baseUrl, browserLauncher);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   try {
     await server.connect(transport);

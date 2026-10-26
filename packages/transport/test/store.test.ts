@@ -24,7 +24,7 @@ test("creates, lists, and reports a ChangeSet", async () => {
         property: "padding",
         before: "24px",
         after: "20px",
-        source: { file: "spacing.css", line: 4, method: "source-map", confidence: "exact" }
+        source: { file: "Card.vue", line: 1, method: "component-runtime", confidence: "component" }
       },
       {
         property: "border-radius",
@@ -38,7 +38,8 @@ test("creates, lists, and reports a ChangeSet", async () => {
   assert.equal(created.schemaVersion, 1);
   assert.match(created.id, /^dt_/);
   assert.equal(created.target.source.method, "utility-class");
-  assert.equal(created.changes[0]?.source?.file, "spacing.css");
+  assert.equal(created.changes[0]?.source?.file, "Card.vue");
+  assert.equal(created.changes[0]?.source?.confidence, "component");
   assert.equal(created.changes[1]?.source?.method, "utility-class");
   assert.equal((await store.list("session-1"))[0]?.status, "pending");
 

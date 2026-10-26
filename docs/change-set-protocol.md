@@ -22,8 +22,8 @@ interface ChangeSet {
     source: {
       file: string;
       line: number;
-      method?: "explicit" | "css-rule" | "source-map" | "utility-class";
-      confidence?: "exact";
+      method?: "explicit" | "css-rule" | "source-map" | "utility-class" | "component-runtime";
+      confidence?: "exact" | "component";
     };
   };
   changes: Array<{
@@ -33,8 +33,8 @@ interface ChangeSet {
     source?: {
       file: string;
       line: number;
-      method?: "explicit" | "css-rule" | "source-map" | "utility-class";
-      confidence?: "exact";
+      method?: "explicit" | "css-rule" | "source-map" | "utility-class" | "component-runtime";
+      confidence?: "exact" | "component";
     };
   }>;
   result?: {
@@ -55,3 +55,4 @@ interface ChangeSet {
 6. Applying a ChangeSet must end with an `applied` or `failed` report containing verification evidence.
 7. `source.method` records whether the producer used an explicit source hint, a unique source-map position, a unique matching CSS rule, or a uniquely located static utility class. Producers must not mark ambiguous candidates as `exact`.
 8. `target.source` is the primary source for backward compatibility. When one operation spans multiple rules, each `changes[].source` records its own exact target. Consumers should prefer the per-change source when present.
+9. `confidence: component` identifies the owning React or Vue component when no editable style rule can be mapped. It is a scoped inspection starting point, not a claim that the captured value is declared on that exact line.

@@ -7,8 +7,8 @@ export type ChangeStatus = "pending" | "applied" | "failed";
 export interface SourceReference {
   file: string;
   line: number;
-  method?: "explicit" | "css-rule" | "source-map" | "utility-class";
-  confidence?: "exact";
+  method?: "explicit" | "css-rule" | "source-map" | "utility-class" | "component-runtime";
+  confidence?: "exact" | "component";
 }
 
 export interface VisualChange {
@@ -53,8 +53,8 @@ export type NewChangeSet = Omit<
 const sourceReferenceSchema = z.object({
   file: z.string().min(1),
   line: z.number().int().positive(),
-  method: z.enum(["explicit", "css-rule", "source-map", "utility-class"]).optional(),
-  confidence: z.literal("exact").optional()
+  method: z.enum(["explicit", "css-rule", "source-map", "utility-class", "component-runtime"]).optional(),
+  confidence: z.enum(["exact", "component"]).optional()
 });
 
 export const newChangeSetSchema = z.object({

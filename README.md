@@ -16,10 +16,11 @@ This repository contains the first engineering migration of the validated DOMTun
 - an agent skill for applying a ChangeSet to source code.
 - exact source mapping for unique CSS rules, CSS Modules, and uniquely used static Tailwind utilities, with explicit hints as the highest-priority signal.
 - per-property source references when one visual operation spans multiple source files.
+- development-time React and Vue component ownership as a fallback for inline or generated styles.
 
 The default Codex flow now launches an isolated Chromium window and injects the overlay through the Chrome DevTools Protocol, so target projects do not need DOMTune in their Vite configuration. The Claude Code adapter is still planned.
 
-For source mapping, DOMTune first honors `data-domtune-source`. Without a hint, controlled-browser mode inspects matched CSS rules through CDP, filters overridden declarations using captured computed values, resolves development source maps, and can locate a generated Tailwind utility at its unique static template occurrence. Each property is resolved independently, so one ChangeSet can safely point to multiple source files. Ambiguous or uninspectable styles are blocked instead of being reported as exact. Vite projects need `css.devSourcemap: true` for generated-style mapping. See [Source mapping](docs/source-mapping.md).
+For source mapping, DOMTune first honors `data-domtune-source`. Without a hint, controlled-browser mode inspects matched CSS rules through CDP, filters overridden declarations using captured computed values, resolves development source maps, and can locate a generated Tailwind utility at its unique static template occurrence. Each property is resolved independently, so one ChangeSet can safely point to multiple source files. When no editable rule exists, React and Vue development metadata can identify the owning component with explicitly lower `component` confidence. Ambiguous or uninspectable styles are blocked instead of being reported as exact. Vite projects need `css.devSourcemap: true` for generated-style mapping. See [Source mapping](docs/source-mapping.md).
 
 ## Architecture
 
@@ -63,6 +64,8 @@ Run the local bridge and an ordinary development server in separate terminals:
 npm start
 npm run demo:vite
 ```
+
+Framework ownership fixtures are available with `npm run demo:react` and `npm run demo:vue`.
 
 Then call `open_domtune` with the absolute workspace and development URL. DOMTune opens an isolated Chrome, Chromium, Edge, or Brave window and injects the overlay without changing the target project's configuration.
 

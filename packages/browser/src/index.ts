@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { constants } from "node:fs";
 import { access, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createConnection, createServer } from "node:net";
-import { delimiter, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SourceMapConsumer, type RawSourceMap } from "source-map-js";
 import WebSocket from "ws";
@@ -42,8 +42,8 @@ export interface BrowserSourceResult {
   source?: {
     file: string;
     line: number;
-    method: "source-map" | "css-rule" | "utility-class";
-    confidence: "exact";
+    method: "source-map" | "css-rule" | "utility-class" | "component-runtime";
+    confidence: "exact" | "component";
   };
   reason?: "session-not-found" | "target-not-found" | "source-unavailable" | "ambiguous";
   candidateCount: number;
@@ -282,6 +282,8 @@ export class ChromiumBrowserSessionLauncher implements BrowserSessionLauncher {
 
     if (candidates.size === 1) return { source: [...candidates.values()][0], candidateCount: 1 };
     if (candidates.size > 1) return { reason: "ambiguous", candidateCount: candidates.size };
+    const componentSource = await resolveComponentOwnerSource(session, queryResult.nodeId);
+    if (componentSource) return { source: componentSource, candidateCount: 1 };
     return { reason: "source-unavailable", candidateCount: 0 };
   }
 
@@ -365,6 +367,101 @@ export class ChromiumBrowserSessionLauncher implements BrowserSessionLauncher {
       throw error;
     }
   }
+}
+
+interface FrameworkOwnerHint {
+  direct?: { file: string; line?: number };
+  reactStacks?: string[];
+}
+
+async function resolveComponentOwnerSource(session: ActiveBrowserSession, nodeId: number): Promise<BrowserSourceResult["source"] | undefined> {
+  try {
+    const resolved = await session.client.send("DOM.resolveNode", { nodeId }) as { object?: { objectId?: string } };
+    if (!resolved.object?.objectId) return undefined;
+    const runtime = await session.client.send("Runtime.callFunctionOn", {
+      objectId: resolved.object.objectId,
+      returnByValue: true,
+      functionDeclaration: `function () {
+        let element = this;
+        while (element) {
+          const vue = element.__vueParentComponent;
+          if (vue) {
+            let instance = vue;
+            while (instance) {
+              if (instance.type && instance.type.__file) return { direct: { file: instance.type.__file, line: 1 } };
+              instance = instance.parent;
+            }
+          }
+          const fiberKey = Object.keys(element).find((key) => key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$"));
+          if (fiberKey) {
+            const reactStacks = [];
+            let fiber = element[fiberKey];
+            while (fiber) {
+              if (fiber._debugSource && fiber._debugSource.fileName) {
+                return { direct: { file: fiber._debugSource.fileName, line: fiber._debugSource.lineNumber || 1 } };
+              }
+              if (fiber._debugStack) reactStacks.push(String(fiber._debugStack.stack || fiber._debugStack));
+              fiber = fiber.return;
+            }
+            if (reactStacks.length) return { reactStacks };
+          }
+          element = element.parentElement;
+        }
+        return null;
+      }`
+    }) as { result?: { value?: FrameworkOwnerHint | null } };
+    const hint = runtime.result?.value;
+    if (!hint) return undefined;
+    if (hint.direct) {
+      const file = toWorkspaceFile(hint.direct.file, session.input.workspace);
+      if (file) {
+        try {
+          await access(resolve(session.input.workspace, file));
+          return { file, line: hint.direct.line ?? 1, method: "component-runtime", confidence: "component" };
+        } catch {
+          return undefined;
+        }
+      }
+    }
+    for (const stack of hint.reactStacks ?? []) {
+      const source = await resolveReactStackSource(session, stack);
+      if (source) return source;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+async function resolveReactStackSource(session: ActiveBrowserSession, stack: string): Promise<BrowserSourceResult["source"] | undefined> {
+  for (const frame of parseReactStackFrames(stack)) {
+    let url: URL;
+    try { url = new URL(frame.url); } catch { continue; }
+    if (url.origin !== new URL(session.state.pageUrl).origin || url.pathname.includes("node_modules") || url.pathname.startsWith("/@")) continue;
+    try {
+      const response = await fetch(url);
+      if (!response.ok) continue;
+      const script = await response.text();
+      const sourceMapUrl = /\/\/# sourceMappingURL=([^\s]+)\s*$/.exec(script)?.[1];
+      if (!sourceMapUrl) continue;
+      const rawMap = await loadSourceMap(sourceMapUrl, url.href);
+      if (!rawMap) continue;
+      const mapped = resolveSourceMapPosition(rawMap, { line: frame.line, column: Math.max(0, frame.column - 1) }, session.input.workspace);
+      if (mapped) return { ...mapped, method: "component-runtime", confidence: "component" };
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
+}
+
+export function parseReactStackFrames(stack: string): Array<{ url: string; line: number; column: number }> {
+  const frames: Array<{ url: string; line: number; column: number }> = [];
+  const pattern = /(https?:\/\/[^\s)]+):(\d+):(\d+)\)?/g;
+  for (let match = pattern.exec(stack); match; match = pattern.exec(stack)) {
+    frames.push({ url: match[1], line: Number(match[2]), column: Number(match[3]) });
+  }
+  return frames;
 }
 
 async function ruleMatchesCapturedValues(client: CdpClient, nodeId: number, properties: CdpCssProperty[], input: BrowserSourceRequest): Promise<boolean> {
@@ -537,7 +634,9 @@ export function resolveSourceMapPosition(
   try {
     const consumer = new SourceMapConsumer(rawMap);
     const original = consumer.originalPositionFor(generated);
-    const file = original.source ? toWorkspaceFile(original.source, workspace) : undefined;
+    let originalSource = original.source;
+    if (originalSource && !isAbsolute(originalSource) && rawMap.file && isAbsolute(rawMap.file)) originalSource = resolve(dirname(rawMap.file), originalSource);
+    const file = originalSource ? toWorkspaceFile(originalSource, workspace) : undefined;
     if (!file || !original.line) return undefined;
     return { file, line: original.line, method: "source-map", confidence: "exact" };
   } catch {

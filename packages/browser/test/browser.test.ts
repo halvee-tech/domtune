@@ -4,7 +4,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { assertTargetReachable, buildChromiumArgs, chromiumCandidates, cleanupStaleBrowserSessions, cssEscapeIdentifier, findUniqueClassSource, isLocalDevelopmentUrl, normalizeCssValue, resolveSourceMapPosition, validateBrowserSessionInput } from "../src/index.js";
+import { assertTargetReachable, buildChromiumArgs, chromiumCandidates, cleanupStaleBrowserSessions, cssEscapeIdentifier, findUniqueClassSource, isLocalDevelopmentUrl, normalizeCssValue, parseReactStackFrames, resolveSourceMapPosition, validateBrowserSessionInput } from "../src/index.js";
 
 test("recognizes loopback development targets", () => {
   assert.equal(isLocalDevelopmentUrl(new URL("http://127.0.0.1:4174/")), true);
@@ -71,6 +71,29 @@ test("maps generated CSS positions to workspace-local original sources", () => {
     sources: ["/workspace/node_modules/tailwindcss/index.css"],
     mappings: "AAAA"
   }, { line: 1, column: 0 }, workspace), undefined);
+  assert.deepEqual(resolveSourceMapPosition({
+    version: 3,
+    file: "/workspace/src/Card.tsx",
+    names: [],
+    sources: ["Card.tsx"],
+    mappings: "AAAA"
+  }, { line: 1, column: 0 }, workspace), {
+    file: "src/Card.tsx",
+    line: 1,
+    method: "source-map",
+    confidence: "exact"
+  });
+});
+
+test("extracts browser URLs from React development stacks", () => {
+  assert.deepEqual(parseReactStackFrames([
+    "Error: react-stack-top-frame",
+    "    at exports.jsxDEV (http://127.0.0.1:4175/node_modules/react.js:20:4)",
+    "    at InsightCard (http://127.0.0.1:4175/src/InsightCard.tsx:3:26)"
+  ].join("\n")), [
+    { url: "http://127.0.0.1:4175/node_modules/react.js", line: 20, column: 4 },
+    { url: "http://127.0.0.1:4175/src/InsightCard.tsx", line: 3, column: 26 }
+  ]);
 });
 
 test("escapes utility class names as CSS identifiers", () => {

@@ -28,9 +28,11 @@
     "demo:vite:injected": "vite --config examples/vite-app/vite.injected.config.ts"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
     "@types/express": "^5.0.0",
     "@types/node": "^22.15.0",
     "esbuild": "^0.25.0",
+    "tailwindcss": "^4.3.3",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
     "vite": "^7.1.7"

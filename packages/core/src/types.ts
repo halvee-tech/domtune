@@ -30,7 +30,7 @@ export interface ChangeSet {
     source: {
       file: string;
       line: number;
-      method?: "explicit" | "css-rule" | "source-map";
+      method?: "explicit" | "css-rule" | "source-map" | "utility-class";
       confidence?: "exact";
     };
   };
@@ -59,7 +59,7 @@ export const newChangeSetSchema = z.object({
     source: z.object({
       file: z.string().min(1),
       line: z.number().int().positive(),
-      method: z.enum(["explicit", "css-rule", "source-map"]).optional(),
+      method: z.enum(["explicit", "css-rule", "source-map", "utility-class"]).optional(),
       confidence: z.literal("exact").optional()
     })
   }),

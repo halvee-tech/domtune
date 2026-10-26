@@ -17,14 +17,14 @@ test("creates, lists, and reports a ChangeSet", async () => {
     target: {
       selector: ".card",
       label: "Card",
-      source: { file: "styles.css", line: 1, method: "source-map", confidence: "exact" }
+      source: { file: "Card.tsx", line: 8, method: "utility-class", confidence: "exact" }
     },
     changes: [{ property: "padding", before: "24px", after: "20px" }]
   });
 
   assert.equal(created.schemaVersion, 1);
   assert.match(created.id, /^dt_/);
-  assert.equal(created.target.source.method, "source-map");
+  assert.equal(created.target.source.method, "utility-class");
   assert.equal((await store.list("session-1"))[0]?.status, "pending");
 
   const notified = await store.markConversationNotified(created.id);

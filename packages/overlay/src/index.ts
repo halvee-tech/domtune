@@ -203,13 +203,13 @@ export function buildOverlayClient(config: OverlayClientConfig): string {
       return { file: candidate.file, line: candidate.line, method: candidate.method, confidence: candidate.confidence };
     }
 
-    async function controlledBrowserSource(properties) {
+    async function controlledBrowserSource(properties, before) {
       if (!selectedToken) return null;
       try {
         const response = await fetch(config.bridgeUrl + "/api/source-map", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ sessionId, targetToken: selectedToken, properties })
+          body: JSON.stringify({ sessionId, targetToken: selectedToken, properties, before })
         });
         const result = await response.json();
         if (response.status === 404 && result.reason === "session-not-found") return null;
@@ -332,8 +332,9 @@ export function buildOverlayClient(config: OverlayClientConfig): string {
       sendButton.textContent = "Mapping…";
       feedbackEl.classList.remove("vt-error");
       const properties = changes.map((change) => change.property);
+      const before = Object.fromEntries(changes.map((change) => [change.property, change.before]));
       const explicit = explicitSourceFor(selected);
-      const controlled = explicit ? null : await controlledBrowserSource(properties);
+      const controlled = explicit ? null : await controlledBrowserSource(properties, before);
       const source = explicit || controlled?.source || (controlled ? null : sourceFor(selected, properties));
       if (!source) {
         sendButton.disabled = false;

@@ -17,6 +17,7 @@ test("the overlay is agent-neutral and emits the DOMTune session contract", () =
   assert.match(client, /\/api\/source-map/);
   assert.match(client, /Mapping…/);
   assert.match(client, /controlled\?\.source/);
+  assert.match(client, /const before = Object\.fromEntries/);
   assert.doesNotMatch(client, /unknown:1/);
   assert.doesNotThrow(() => new Function(client));
   assert.match(client, /Send to Agent/);

@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { constants } from "node:fs";
 import { access, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createConnection, createServer } from "node:net";
-import { delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { delimiter, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SourceMapConsumer, type RawSourceMap } from "source-map-js";
 import WebSocket from "ws";
@@ -35,13 +35,14 @@ export interface BrowserSourceRequest {
   sessionId: string;
   targetToken: string;
   properties: string[];
+  before?: Record<string, string>;
 }
 
 export interface BrowserSourceResult {
   source?: {
     file: string;
     line: number;
-    method: "source-map" | "css-rule";
+    method: "source-map" | "css-rule" | "utility-class";
     confidence: "exact";
   };
   reason?: "session-not-found" | "target-not-found" | "source-unavailable" | "ambiguous";
@@ -71,6 +72,7 @@ interface ActiveBrowserSession {
   client: CdpClient;
   input: BrowserSessionInput;
   styleSheets: Map<string, CdpStyleSheetHeader>;
+  tailwindStyleSheets: Map<string, boolean>;
 }
 
 interface CdpStyleSheetHeader {
@@ -242,6 +244,9 @@ export class ChromiumBrowserSessionLauncher implements BrowserSessionLauncher {
     }) as { nodeId: number };
     if (!queryResult.nodeId) return { reason: "target-not-found", candidateCount: 0 };
 
+    const described = await session.client.send("DOM.describeNode", { nodeId: queryResult.nodeId, depth: 0 }) as { node: { attributes?: string[] } };
+    const classNames = attributeValue(described.node.attributes ?? [], "class")?.split(/\s+/).filter(Boolean) ?? [];
+
     const matched = await session.client.send("CSS.getMatchedStylesForNode", { nodeId: queryResult.nodeId }) as {
       matchedCSSRules?: Array<{
         rule: {
@@ -255,11 +260,21 @@ export class ChromiumBrowserSessionLauncher implements BrowserSessionLauncher {
     for (const match of matched.matchedCSSRules ?? []) {
       const rule = match.rule;
       if (!rule.styleSheetId || !ruleDeclaresAny(rule.style?.cssProperties ?? [], input.properties)) continue;
+      if (!await ruleMatchesCapturedValues(session.client, queryResult.nodeId, rule.style?.cssProperties ?? [], input)) continue;
       const header = session.styleSheets.get(rule.styleSheetId);
       if (!header) continue;
       const range = rule.selectorList?.range ?? rule.style?.range;
       if (!range) continue;
       const source = await resolveCdpRuleSource(session, header, range);
+      if (!source && await isTailwindStyleSheet(session, header)) {
+        const utilityClass = utilityClassForSelector(rule.selectorList?.text ?? "", classNames);
+        const utilitySource = utilityClass ? await findUniqueClassSource(session.input.workspace, utilityClass) : undefined;
+        if (utilitySource) {
+          const candidate = { ...utilitySource, method: "utility-class" as const, confidence: "exact" as const };
+          candidates.set(`${candidate.file}:${candidate.line}:${utilityClass}`, candidate);
+          continue;
+        }
+      }
       if (!source) continue;
       const key = `${source.file}:${source.line}:${rule.selectorList?.text ?? ""}`;
       candidates.set(key, source);
@@ -301,12 +316,15 @@ export class ChromiumBrowserSessionLauncher implements BrowserSessionLauncher {
       const target = await waitForPageTarget(debugPort, pageUrl, this.timeoutMs, child, () => spawnError);
       client = await CdpClient.connect(target.webSocketDebuggerUrl!);
       const styleSheets = new Map<string, CdpStyleSheetHeader>();
+      const tailwindStyleSheets = new Map<string, boolean>();
       client.on("CSS.styleSheetAdded", (params) => {
         const header = (params as { header: CdpStyleSheetHeader }).header;
         styleSheets.set(header.styleSheetId, header);
       });
       client.on("CSS.styleSheetRemoved", (params) => {
-        styleSheets.delete((params as { styleSheetId: string }).styleSheetId);
+        const styleSheetId = (params as { styleSheetId: string }).styleSheetId;
+        styleSheets.delete(styleSheetId);
+        tailwindStyleSheets.delete(styleSheetId);
       });
       const source = buildOverlayClient({
         bridgeUrl: input.bridgeUrl,
@@ -331,7 +349,7 @@ export class ChromiumBrowserSessionLauncher implements BrowserSessionLauncher {
         workspace: input.workspace
       };
       await writeFile(join(sessionRoot, "session.json"), JSON.stringify(persisted, null, 2), "utf8");
-      const active = { state, sessionRoot, child, client, input, styleSheets };
+      const active = { state, sessionRoot, child, client, input, styleSheets, tailwindStyleSheets };
       this.sessions.set(input.sessionId, active);
       child.once("exit", () => {
         if (this.sessions.get(input.sessionId) !== active) return;
@@ -347,6 +365,126 @@ export class ChromiumBrowserSessionLauncher implements BrowserSessionLauncher {
       throw error;
     }
   }
+}
+
+async function ruleMatchesCapturedValues(client: CdpClient, nodeId: number, properties: CdpCssProperty[], input: BrowserSourceRequest): Promise<boolean> {
+  if (!input.before) return true;
+  const declarations = properties.flatMap((declaration) => input.properties.flatMap((requested) => {
+    if (declaration.name === requested || (requested === "background-color" && declaration.name === "background")) return [{ declaration, requested }];
+    return [];
+  }));
+  if (!declarations.length) return false;
+  try {
+    for (const requested of new Set(declarations.map((item) => item.requested))) {
+      const before = input.before[requested];
+      if (!before) continue;
+      let matches = false;
+      for (const { declaration } of declarations.filter((item) => item.requested === requested)) {
+        if (!declaration.value) continue;
+        const propertyName = requested === "font-size" || requested === "background-color" ? requested : undefined;
+        const result = await client.send("CSS.resolveValues", {
+          values: [declaration.value],
+          nodeId,
+          ...(propertyName ? { propertyName } : {})
+        }) as { results: string[] };
+        if (normalizeCssValue(result.results[0] ?? declaration.value) === normalizeCssValue(before)) {
+          matches = true;
+          break;
+        }
+      }
+      if (!matches) return false;
+    }
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+function normalizeCssValue(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ").replace(/\s*,\s*/g, ", ");
+}
+
+async function isTailwindStyleSheet(session: ActiveBrowserSession, header: CdpStyleSheetHeader): Promise<boolean> {
+  const cached = session.tailwindStyleSheets.get(header.styleSheetId);
+  if (cached !== undefined) return cached;
+  const ownerFile = await styleSheetOwnerFile(session.client, header);
+  const file = ownerFile ? toWorkspaceFile(ownerFile, session.input.workspace) : undefined;
+  let isTailwind = false;
+  if (file) {
+    try {
+      isTailwind = /@import\s+["']tailwindcss(?:\/[^"']*)?["']/.test(await readFile(resolve(session.input.workspace, file), "utf8"));
+    } catch {
+      isTailwind = false;
+    }
+  }
+  session.tailwindStyleSheets.set(header.styleSheetId, isTailwind);
+  return isTailwind;
+}
+
+function utilityClassForSelector(selector: string, classNames: string[]): string | undefined {
+  const matches = classNames.filter((className) => selector.includes(`.${cssEscapeIdentifier(className)}`));
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+export function cssEscapeIdentifier(value: string): string {
+  const string = String(value);
+  let result = "";
+  for (let index = 0; index < string.length; index += 1) {
+    const code = string.charCodeAt(index);
+    if (code === 0) { result += "\uFFFD"; continue; }
+    if ((code >= 1 && code <= 31) || code === 127 || (index === 0 && code >= 48 && code <= 57) || (index === 1 && code >= 48 && code <= 57 && string.charCodeAt(0) === 45)) {
+      result += `\\${code.toString(16)} `;
+      continue;
+    }
+    if (index === 0 && code === 45 && string.length === 1) { result += "\\-"; continue; }
+    if (code >= 128 || code === 45 || code === 95 || code >= 48 && code <= 57 || code >= 65 && code <= 90 || code >= 97 && code <= 122) result += string[index];
+    else result += `\\${string[index]}`;
+  }
+  return result;
+}
+
+const sourceExtensions = new Set([".html", ".js", ".jsx", ".ts", ".tsx", ".vue", ".svelte", ".astro"]);
+const ignoredSourceDirectories = new Set([".git", ".next", ".nuxt", ".output", "build", "coverage", "dist", "node_modules"]);
+
+export async function findUniqueClassSource(workspace: string, className: string): Promise<{ file: string; line: number } | undefined> {
+  const matches: Array<{ file: string; line: number }> = [];
+  const escaped = className.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp("(^|[\\s\"'`])" + escaped + "(?=$|[\\s\"'`])", "gm");
+  async function visit(directory: string): Promise<void> {
+    if (matches.length > 1) return;
+    let entries;
+    try { entries = await readdir(directory, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (matches.length > 1) return;
+      const absolute = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (!ignoredSourceDirectories.has(entry.name)) await visit(absolute);
+        continue;
+      }
+      if (!entry.isFile() || !sourceExtensions.has(extname(entry.name))) continue;
+      let text: string;
+      try {
+        if ((await stat(absolute)).size > 1_000_000) continue;
+        text = await readFile(absolute, "utf8");
+      } catch { continue; }
+      pattern.lastIndex = 0;
+      for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
+        const tokenOffset = match.index + match[1].length;
+        matches.push({
+          file: relative(workspace, absolute).replaceAll("\\", "/"),
+          line: text.slice(0, tokenOffset).split("\n").length
+        });
+        if (matches.length > 1) return;
+      }
+    }
+  }
+  await visit(resolve(workspace));
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function attributeValue(attributes: string[], name: string): string | undefined {
+  for (let index = 0; index < attributes.length; index += 2) if (attributes[index] === name) return attributes[index + 1];
+  return undefined;
 }
 
 function ruleDeclaresAny(properties: CdpCssProperty[], requested: string[]): boolean {
@@ -450,7 +588,9 @@ function toWorkspaceFile(value: string, workspace: string): string | undefined {
   const relativePath = relative(resolve(workspace), resolve(absolute));
   if (!relativePath) return ".";
   if (relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) return undefined;
-  return relativePath.replaceAll("\\", "/");
+  const normalized = relativePath.replaceAll("\\", "/");
+  if (normalized.split("/").includes("node_modules")) return undefined;
+  return normalized;
 }
 
 function normalizeNewlines(value: string): string {

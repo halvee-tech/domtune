@@ -21,7 +21,8 @@ const app = createMcpExpressApp({ host });
 const browserSourceRequestSchema = z.object({
   sessionId: z.string().min(1),
   targetToken: z.string().regex(/^[A-Za-z0-9_-]+$/),
-  properties: z.array(z.enum(["padding", "border-radius", "font-size", "background-color"])).min(1)
+  properties: z.array(z.enum(["padding", "border-radius", "font-size", "background-color"])).min(1),
+  before: z.record(z.string(), z.string()).optional()
 });
 
 app.use((req: Request, res: Response, next: NextFunction) => {

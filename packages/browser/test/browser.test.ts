@@ -4,7 +4,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { assertTargetReachable, buildChromiumArgs, chromiumCandidates, cleanupStaleBrowserSessions, isLocalDevelopmentUrl, resolveSourceMapPosition, validateBrowserSessionInput } from "../src/index.js";
+import { assertTargetReachable, buildChromiumArgs, chromiumCandidates, cleanupStaleBrowserSessions, cssEscapeIdentifier, findUniqueClassSource, isLocalDevelopmentUrl, resolveSourceMapPosition, validateBrowserSessionInput } from "../src/index.js";
 
 test("recognizes loopback development targets", () => {
   assert.equal(isLocalDevelopmentUrl(new URL("http://127.0.0.1:4174/")), true);
@@ -64,6 +64,31 @@ test("maps generated CSS positions to workspace-local original sources", () => {
     sources: ["/outside/card.css"],
     mappings: "AAAA"
   }, { line: 1, column: 0 }, workspace), undefined);
+  assert.equal(resolveSourceMapPosition({
+    version: 3,
+    file: "generated.css",
+    names: [],
+    sources: ["/workspace/node_modules/tailwindcss/index.css"],
+    mappings: "AAAA"
+  }, { line: 1, column: 0 }, workspace), undefined);
+});
+
+test("escapes utility class names as CSS identifiers", () => {
+  assert.equal(cssEscapeIdentifier("rounded-[37px]"), "rounded-\\[37px\\]");
+  assert.equal(cssEscapeIdentifier("hover:bg-emerald-500/50"), "hover\\:bg-emerald-500\\/50");
+});
+
+test("finds only a unique static utility class occurrence", async () => {
+  const root = await mkdtemp(join(tmpdir(), "domtune-utility-test-"));
+  await mkdir(join(root, "src"), { recursive: true });
+  await mkdir(join(root, "dist"), { recursive: true });
+  await writeFile(join(root, "src", "card.tsx"), "export const card = <article className=\"p-6 rounded-[37px]\" />;\n");
+  await writeFile(join(root, "dist", "ignored.js"), "const ignored = 'rounded-[37px]';\n");
+
+  assert.deepEqual(await findUniqueClassSource(root, "rounded-[37px]"), { file: "src/card.tsx", line: 1 });
+  await writeFile(join(root, "src", "duplicate.vue"), "<div class=\"rounded-[37px]\" />\n");
+  assert.equal(await findUniqueClassSource(root, "rounded-[37px]"), undefined);
+  await rm(root, { recursive: true, force: true });
 });
 
 test("checks that the target development server is reachable", async () => {

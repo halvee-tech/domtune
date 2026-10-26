@@ -16,5 +16,10 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
       <strong>81.7%</strong>
       <small>+3.4% this month</small>
     </article>
+    <article class="cascade-decoy mt-6 w-full max-w-[480px] rounded-[18px] bg-[#f6eadf] p-[26px] shadow-[0_18px_48px_rgb(25_44_34_/_9%)]" aria-label="Expansion metric card">
+      <span class="font-mono text-[11px] font-bold uppercase tracking-[.1em] text-[#74675d]">Expansion rate</span>
+      <strong class="my-[16px] block text-[52px] font-bold tracking-[-.05em]">124%</strong>
+      <small class="font-bold text-[#9a5c2f]">+6.1% this quarter</small>
+    </article>
   </section>
 `;

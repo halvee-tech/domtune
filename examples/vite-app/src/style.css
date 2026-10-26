@@ -1,3 +1,9 @@
+@import "tailwindcss";
+
+@layer base {
+  .cascade-decoy { border-radius: 44px; }
+}
+
 :root {
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
   color: #111713;

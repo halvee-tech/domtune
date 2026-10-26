@@ -14,11 +14,11 @@ This repository contains the first engineering migration of the validated DOMTun
 - a local HTTP bridge and stdio MCP server;
 - a Codex MCP App bridge that can continue the originating conversation;
 - an agent skill for applying a ChangeSet to source code.
-- exact source mapping for unique CSS rules and CSS Modules through development source maps, with explicit hints as the highest-priority signal.
+- exact source mapping for unique CSS rules, CSS Modules, and uniquely used static Tailwind utilities, with explicit hints as the highest-priority signal.
 
 The default Codex flow now launches an isolated Chromium window and injects the overlay through the Chrome DevTools Protocol, so target projects do not need DOMTune in their Vite configuration. The Claude Code adapter is still planned.
 
-For source mapping, DOMTune first honors `data-domtune-source`. Without a hint, controlled-browser mode inspects matched CSS rules through CDP, resolves development source maps when available, and accepts only one workspace-local rule that declares the changed property. Ambiguous or uninspectable styles are blocked instead of being reported as an exact source. Vite projects need `css.devSourcemap: true` for CSS Module originals. See [Source mapping](docs/source-mapping.md).
+For source mapping, DOMTune first honors `data-domtune-source`. Without a hint, controlled-browser mode inspects matched CSS rules through CDP, filters overridden declarations using captured computed values, resolves development source maps, and can locate a generated Tailwind utility at its unique static template occurrence. Ambiguous or uninspectable styles are blocked instead of being reported as exact. Vite projects need `css.devSourcemap: true` for generated-style mapping. See [Source mapping](docs/source-mapping.md).
 
 ## Architecture
 

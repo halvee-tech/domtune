@@ -1,0 +1,4 @@
+interface:
+  display_name: "Apply DOMTune Changes"
+  short_description: "Apply a DOMTune ChangeSet to source code"
+  default_prompt: "Use $apply-domtune to apply the latest captured frontend changes."

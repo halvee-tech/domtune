@@ -1,0 +1,12 @@
+{
+  "name": "domtune-dev",
+  "interface": { "displayName": "DOMTune Development" },
+  "plugins": [
+    {
+      "name": "domtune",
+      "source": { "source": "local", "path": "./" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Developer Tools"
+    }
+  ]
+}

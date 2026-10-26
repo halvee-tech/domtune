@@ -1,0 +1,7 @@
+node_modules/
+dist/
+packages/*/dist/
+.domtune/
+*.log
+*.tsbuildinfo
+.DS_Store

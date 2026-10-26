@@ -1,0 +1,66 @@
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  color: #111713;
+  background: #dfe6dc;
+}
+
+* { box-sizing: border-box; }
+
+body { margin: 0; min-width: 320px; min-height: 100vh; }
+
+.nav {
+  display: flex;
+  justify-content: space-between;
+  padding: 24px 5vw;
+  border-bottom: 1px solid rgb(17 23 19 / 12%);
+  color: #536058;
+  font-size: 13px;
+}
+
+.nav strong { color: #111713; font-size: 16px; }
+
+.hero {
+  min-height: calc(100vh - 70px);
+  padding: 10vh 8vw;
+}
+
+.hero > p {
+  margin: 0 0 14px;
+  color: #65726a;
+  font: 700 12px/1 ui-monospace, monospace;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.hero h1 {
+  max-width: 760px;
+  margin: 0;
+  font-size: clamp(58px, 10vw, 128px);
+  line-height: .88;
+  letter-spacing: -.075em;
+}
+
+.metric-card {
+  width: min(480px, 100%);
+  margin-top: 64px;
+  padding: 32px;
+  border-radius: 24px;
+  background: #f3f5ef;
+  box-shadow: 0 28px 70px rgb(25 44 34 / 12%);
+}
+
+.metric-card span {
+  color: #66736b;
+  font: 700 11px/1 ui-monospace, monospace;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.metric-card strong {
+  display: block;
+  margin: 20px 0 4px;
+  font-size: 64px;
+  letter-spacing: -.06em;
+}
+
+.metric-card small { color: #1d7a4b; font-weight: 750; }

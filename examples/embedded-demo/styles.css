@@ -1,0 +1,46 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  background: #e8ece5;
+  color: #17201b;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; }
+button, input { font: inherit; }
+.demo-shell { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr) 320px; }
+.canvas { padding: 36px clamp(24px, 6vw, 96px); background: #dde4da; }
+nav { display: flex; justify-content: space-between; align-items: center; }
+.logo { font-weight: 800; letter-spacing: -.04em; }
+.quiet { min-height: 40px; padding: 0 16px; border: 1px solid #b7c0b6; border-radius: 999px; background: transparent; }
+.hero { margin-top: 16vh; max-width: 720px; }
+.hero p, .metric-label { color: #617066; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.hero h1 { margin: 10px 0 50px; max-width: 650px; font-size: 48px; line-height: .98; letter-spacing: -.065em; }
+
+.metric-card {
+  width: min(100%, 520px);
+  padding: 24px;
+  border-radius: 18px;
+  background: #f3f5ef;
+  box-shadow: 0 20px 50px rgb(36 54 44 / 12%);
+}
+.metric-card p { margin: 0 0 24px; }
+.metric-card strong { display: block; font-size: 52px; letter-spacing: -.06em; }
+.metric-card span { color: #2e7b52; font-size: 13px; font-weight: 700; }
+.inspector { padding: 28px 22px; background: #0d100e; color: #f2f5f1; display: flex; flex-direction: column; gap: 22px; }
+.eyebrow { margin: 0 0 5px; color: #7f8a82; font: 700 10px/1 ui-monospace, monospace; text-transform: uppercase; letter-spacing: .1em; }
+.inspector h2 { margin: 0; font-size: 20px; }
+.inspector label { display: grid; grid-template-columns: 1fr auto; gap: 10px; color: #b8c0ba; font-size: 13px; }
+.inspector output { font-family: ui-monospace, monospace; color: #f2f5f1; }
+.inspector input[type="range"] { grid-column: 1 / -1; width: 100%; accent-color: #72e0a5; }
+.inspector input[type="color"] { width: 42px; height: 32px; border: 1px solid #353b37; border-radius: 7px; background: none; }
+.primary { margin-top: auto; min-height: 46px; border: 0; border-radius: 10px; background: #72e0a5; color: #07140d; font-weight: 800; cursor: pointer; }
+.primary:focus-visible { outline: 3px solid #b8c5ff; outline-offset: 3px; }
+.primary:disabled { opacity: .5; cursor: wait; }
+.feedback { min-height: 38px; margin: -10px 0 0; color: #8d988f; font-size: 12px; line-height: 1.5; }
+.feedback code { color: #c9f5d9; }
+@media (max-width: 760px) {
+  .demo-shell { grid-template-columns: 1fr; }
+  .canvas { min-height: 70vh; }
+  .inspector { min-height: 360px; }
+}

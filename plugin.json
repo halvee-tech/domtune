@@ -1,0 +1,15 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "domtune",
+  "version": "0.1.0",
+  "description": "Tune a live frontend visually and send source-mapped changes back to the current coding-agent conversation.",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "DOMTune",
+        "shortDescription": "Tune a live frontend and send changes back to Codex"
+      },
+      "requires_local_executor": true
+    }
+  }
+}

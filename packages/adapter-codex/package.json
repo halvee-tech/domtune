@@ -1,0 +1,20 @@
+{
+  "name": "@domtune/adapter-codex",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/stdio.js",
+  "types": "./dist/mcp.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/stdio.js",
+    "dev": "tsx watch src/stdio.ts"
+  },
+  "dependencies": {
+    "@domtune/core": "0.1.0",
+    "@domtune/transport": "0.1.0",
+    "@modelcontextprotocol/ext-apps": "^2.0.3",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.7"
+  }
+}

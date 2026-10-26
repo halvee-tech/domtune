@@ -1,0 +1,38 @@
+{
+  "name": "domtune",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/core",
+    "packages/overlay",
+    "packages/transport",
+    "packages/vite",
+    "packages/adapter-codex"
+  ],
+  "scripts": {
+    "build": "npm run build:core && npm run build:overlay && npm run build:transport && npm run build:vite && npm run build:adapter-codex && npm run bundle:plugin",
+    "build:core": "npm run build -w @domtune/core",
+    "build:overlay": "npm run build -w @domtune/overlay",
+    "build:transport": "npm run build -w @domtune/transport",
+    "build:vite": "npm run build -w @domtune/vite",
+    "build:adapter-codex": "npm run build -w @domtune/adapter-codex",
+    "bundle:plugin": "esbuild packages/adapter-codex/src/stdio.ts --bundle --platform=node --format=cjs --target=node20 --outfile=dist/plugin/stdio.cjs",
+    "check": "npm run build",
+    "test": "npm run build && node --import tsx --test packages/*/test/*.test.ts",
+    "start": "npm run start -w @domtune/adapter-codex",
+    "dev": "npm run dev -w @domtune/adapter-codex",
+    "demo:vite": "vite --config examples/vite-app/vite.config.ts"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.15.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.1.7"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

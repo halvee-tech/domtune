@@ -9,6 +9,7 @@ export interface DomTunePluginOptions {
 const CLIENT_PATH = "/@domtune/client.js";
 
 export function domTunePlugin(options: DomTunePluginOptions = {}): Plugin {
+  const clientUrl = `${CLIENT_PATH}?v=${Date.now().toString(36)}`;
   const config = {
     bridgeUrl: options.bridgeUrl ?? "http://127.0.0.1:47822",
     workspace: options.workspace ?? process.cwd()
@@ -20,11 +21,12 @@ export function domTunePlugin(options: DomTunePluginOptions = {}): Plugin {
     configureServer(server) {
       server.middlewares.use(CLIENT_PATH, (_req, res) => {
         res.setHeader("content-type", "text/javascript; charset=utf-8");
+        res.setHeader("cache-control", "no-store");
         res.end(buildOverlayClient(config));
       });
     },
     transformIndexHtml() {
-      return [{ tag: "script", attrs: { type: "module", src: CLIENT_PATH }, injectTo: "body" }];
+      return [{ tag: "script", attrs: { type: "module", src: clientUrl }, injectTo: "body" }];
     }
   };
 }

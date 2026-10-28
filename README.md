@@ -9,18 +9,25 @@ DOMTune lets a user adjust a real frontend visually and send a source-mapped Cha
 This repository contains the first engineering migration of the validated DOMTune proof of concept. The current vertical slice supports:
 
 - a controlled-browser-injected Shadow DOM overlay, with optional Vite compatibility injection;
-- element selection and live adjustment of padding, corner radius, font size, and surface color;
+- element selection and live adjustment of width, height, four-sided margin, border, padding, corner radius, typography, and color;
 - versioned, persistent ChangeSets;
 - a local HTTP bridge and stdio MCP server;
-- a Codex MCP App bridge that can continue the originating conversation;
+- a persistent Codex MCP App session bridge that turns a browser submission into a standard message in the originating conversation and can reconnect after plugin/runtime restarts;
 - an agent skill for applying a ChangeSet to source code.
 - exact source mapping for unique CSS rules, CSS Modules, and uniquely used static Tailwind utilities, with explicit hints as the highest-priority signal.
 - per-property source references when one visual operation spans multiple source files.
 - declaration-level mapping for unique static React and Vue inline styles, including statically verifiable scalar and nested object tokens from relative modules, with component ownership as the fallback for dynamic or generated values.
+- static Token usage scope metadata so agents can distinguish a single-use value from a shared design decision before editing.
+- an in-overlay confirmation gate before shared or unknown-scope Token changes are sent to the agent.
+- a compact Chrome DevTools-inspired inspector with a selection-mode switch, hover and selected-element outlines, and viewport-aware placement beside the selected element.
+- a multi-element draft queue: adjusted elements and elements with written instructions stay pending across successive selections, while untouched selections are discarded automatically.
+- one request flow for slider adjustments, per-element natural-language prompts, or both together, with the full page URL and title included as route context.
+- a compact, focus-mode inspector with mutually exclusive Layout, Appearance, and Type groups; the full box model, pending-target list, color inventory, and message composer expand only when needed.
+- a DevTools-style box model editor with project colors collected from the rendered page plus an explicit custom color picker for surface, text, and border colors.
 
 The default Codex flow now launches an isolated Chromium window and injects the overlay through the Chrome DevTools Protocol, so target projects do not need DOMTune in their Vite configuration. The Claude Code adapter is still planned.
 
-For source mapping, DOMTune first honors `data-domtune-source`. Without a hint, controlled-browser mode inspects matched CSS rules through CDP, filters overridden declarations using captured computed values, resolves development source maps, and can locate a generated Tailwind utility at its unique static template occurrence. Each property is resolved independently, so one ChangeSet can safely point to multiple source files. When no editable rule exists, React and Vue development metadata identifies the owning component; one unique static declaration whose browser-resolved value matches the captured value is promoted to `component-style` with `exact` confidence. A `const` identifier or static member path such as `theme.card.radius` can be followed into the component or one relative named-import module and recorded as `component-token`. Function calls, computed properties, mutable bindings, object spreads, and ambiguous values retain the lower `component-runtime` / `component` ownership result. Ambiguous or uninspectable styles are never reported as exact. Vite projects need `css.devSourcemap: true` for generated-style mapping. See [Source mapping](docs/source-mapping.md).
+For source mapping, DOMTune first honors `data-domtune-source`. Without a hint, controlled-browser mode inspects matched CSS rules through CDP, filters overridden declarations using captured computed values, resolves development source maps, and can locate a generated Tailwind utility at its unique static template occurrence. Each property is resolved independently, so one ChangeSet can safely point to multiple source files. When no editable rule exists, React and Vue development metadata identifies the owning component; one unique static declaration whose browser-resolved value matches the captured value is promoted to `component-style` with `exact` confidence. A `const` identifier or static member path such as `theme.card.radius` can be followed into the component or one relative named-import module and recorded as `component-token`. Static import and reference analysis adds `usageCount` plus `usageScope: single | shared | unknown`. Function calls, computed properties, mutable bindings, object spreads, and ambiguous values retain the lower `component-runtime` / `component` ownership result. Ambiguous or uninspectable styles are never reported as exact. Vite projects need `css.devSourcemap: true` for generated-style mapping. See [Source mapping](docs/source-mapping.md).
 
 ## Architecture
 
@@ -67,7 +74,7 @@ npm run demo:vite
 
 Framework ownership fixtures are available with `npm run demo:react` and `npm run demo:vue`.
 
-Then call `open_domtune` with the absolute workspace and development URL. DOMTune opens an isolated Chrome, Chromium, Edge, or Brave window and injects the overlay without changing the target project's configuration.
+Then ask to adjust or inspect the running page. The bundled `open-domtune` skill automatically selects `open_domtune` from that intent, so the prompt does not need to name DOMTune. DOMTune opens an isolated Chrome, Chromium, Edge, or Brave window, injects the overlay without changing the target project's configuration, and keeps the agent turn waiting for **Send to Agent**. If no single development URL can be inferred, the agent asks before opening one.
 
 The default fixture deliberately does not load `@domtune/vite`. To exercise the legacy project-side injection path instead, run:
 
@@ -87,7 +94,7 @@ Controlled-browser mode accepts localhost targets by default and uses a dedicate
 
 ## Codex plugin development
 
-`npm run build` creates a self-contained local plugin runtime at `dist/plugin/stdio.cjs`. The repository root is the plugin root and contains `plugin.json`, `mcp.json`, and `skills/`.
+`npm run build` creates a self-contained local plugin runtime at `dist/plugin/stdio.cjs`. The repository root is the plugin root and contains `plugin.json`, `mcp.json`, and `skills/`. The `open-domtune` skill supports implicit invocation for live visual-adjustment requests; `apply-domtune` handles ChangeSets sent back from the browser.
 
 For a local marketplace test, add this repository as a marketplace after building it, install `domtune@domtune-dev`, and start a fresh Codex chat.
 

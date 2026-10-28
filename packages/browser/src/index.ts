@@ -13,6 +13,7 @@ export interface BrowserSessionInput {
   targetUrl: string;
   bridgeUrl: string;
   workspace: string;
+  conversationKey?: string;
 }
 
 export interface BrowserSession {
@@ -21,6 +22,9 @@ export interface BrowserSession {
   pid?: number;
   debugPort: number;
   pageUrl: string;
+  workspace: string;
+  createdAt: string;
+  conversationKey?: string;
 }
 
 export interface BrowserSessionLauncher {
@@ -44,6 +48,8 @@ export interface BrowserSourceResult {
     line: number;
     method: "source-map" | "css-rule" | "utility-class" | "component-runtime" | "component-style" | "component-token";
     confidence: "exact" | "component";
+    usageCount?: number;
+    usageScope?: "single" | "shared" | "unknown";
   };
   reason?: "session-not-found" | "target-not-found" | "source-unavailable" | "ambiguous";
   candidateCount: number;
@@ -51,6 +57,7 @@ export interface BrowserSourceResult {
 
 export interface ChromiumLauncherOptions {
   dataRoot: string;
+  bridgeUrl?: string;
   executable?: string;
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
@@ -63,16 +70,28 @@ interface PersistedBrowserSession extends BrowserSession {
   createdAt: string;
   targetUrl: string;
   workspace: string;
+  bridgeUrl?: string;
 }
 
 interface ActiveBrowserSession {
   state: BrowserSession;
   sessionRoot: string;
-  child: ChildProcess;
-  client: CdpClient;
+  child?: ChildProcess;
   input: BrowserSessionInput;
+  pages: Map<string, ActivePageSession>;
+  discoveryTimer: NodeJS.Timeout;
+}
+
+interface ActivePageSession {
+  targetId: string;
+  client: CdpClient;
   styleSheets: Map<string, CdpStyleSheetHeader>;
   tailwindStyleSheets: Map<string, boolean>;
+}
+
+interface SourceBrowserSession extends ActivePageSession {
+  input: BrowserSessionInput;
+  pageUrl: string;
 }
 
 interface CdpStyleSheetHeader {
@@ -98,9 +117,68 @@ interface CdpCssProperty {
 }
 
 interface CdpTarget {
+  id: string;
   type: string;
   url: string;
   webSocketDebuggerUrl?: string;
+}
+
+async function attachPageTarget(target: CdpTarget, source: string): Promise<ActivePageSession> {
+  if (!target.webSocketDebuggerUrl) throw new Error("DOMTune page target does not expose a debugging connection.");
+  const client = await CdpClient.connect(target.webSocketDebuggerUrl);
+  const styleSheets = new Map<string, CdpStyleSheetHeader>();
+  const tailwindStyleSheets = new Map<string, boolean>();
+  client.on("CSS.styleSheetAdded", (params) => {
+    const header = (params as { header: CdpStyleSheetHeader }).header;
+    styleSheets.set(header.styleSheetId, header);
+  });
+  client.on("CSS.styleSheetRemoved", (params) => {
+    const styleSheetId = (params as { styleSheetId: string }).styleSheetId;
+    styleSheets.delete(styleSheetId);
+    tailwindStyleSheets.delete(styleSheetId);
+  });
+  try {
+    await client.send("Page.enable");
+    await client.send("Runtime.enable");
+    await client.send("DOM.enable");
+    await client.send("CSS.enable");
+    await client.send("Page.addScriptToEvaluateOnNewDocument", { source });
+    const evaluation = await client.send("Runtime.evaluate", { expression: source, awaitPromise: true }) as { exceptionDetails?: { text?: string; exception?: { description?: string } } };
+    if (evaluation.exceptionDetails) {
+      throw new Error(`DOMTune overlay injection failed: ${evaluation.exceptionDetails.exception?.description ?? evaluation.exceptionDetails.text ?? "unknown page error"}`);
+    }
+    return { targetId: target.id, client, styleSheets, tailwindStyleSheets };
+  } catch (error) {
+    client.close();
+    throw error;
+  }
+}
+
+async function discoverSessionPages(debugPort: number, sessionId: string, pages: Map<string, ActivePageSession>, source: string): Promise<void> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${debugPort}/json/list`, { signal: AbortSignal.timeout(1_000) });
+    if (!response.ok) return;
+    const targets = await response.json() as CdpTarget[];
+    const liveTargetIds = new Set(targets.map((target) => target.id));
+    for (const [targetId, page] of pages) {
+      if (liveTargetIds.has(targetId)) continue;
+      page.client.close();
+      pages.delete(targetId);
+    }
+    for (const target of targets) {
+      if (target.type !== "page" || !target.webSocketDebuggerUrl || pages.has(target.id)) continue;
+      let matchesSession = false;
+      try {
+        matchesSession = new URL(target.url).searchParams.get("domTuneSession") === sessionId;
+      } catch {
+        // Ignore non-URL targets.
+      }
+      if (!matchesSession) continue;
+      pages.set(target.id, await attachPageTarget(target, source));
+    }
+  } catch {
+    // Chrome may be navigating or closing; the next discovery pass will retry.
+  }
 }
 
 interface PendingCommand {
@@ -213,8 +291,10 @@ export class ChromiumBrowserSessionLauncher implements BrowserSessionLauncher {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
     this.sessions.delete(sessionId);
-    session.client.close();
-    await stopChild(session.child);
+    clearInterval(session.discoveryTimer);
+    for (const page of session.pages.values()) page.client.close();
+    if (session.child) await stopChild(session.child);
+    else if (session.state.pid) await stopProcess(session.state.pid);
     await removeSessionRoot(session.sessionRoot);
     return true;
   }
@@ -236,68 +316,99 @@ export class ChromiumBrowserSessionLauncher implements BrowserSessionLauncher {
     const session = this.sessions.get(input.sessionId);
     if (!session) return { reason: "session-not-found", candidateCount: 0 };
     if (!/^[A-Za-z0-9_-]+$/.test(input.targetToken)) return { reason: "target-not-found", candidateCount: 0 };
-
-    const documentResult = await session.client.send("DOM.getDocument", { depth: 0, pierce: true }) as { root: { nodeId: number } };
-    const queryResult = await session.client.send("DOM.querySelector", {
-      nodeId: documentResult.root.nodeId,
-      selector: `[data-domtune-target="${input.targetToken}"]`
-    }) as { nodeId: number };
-    if (!queryResult.nodeId) return { reason: "target-not-found", candidateCount: 0 };
-
-    const described = await session.client.send("DOM.describeNode", { nodeId: queryResult.nodeId, depth: 0 }) as { node: { attributes?: string[] } };
-    const classNames = attributeValue(described.node.attributes ?? [], "class")?.split(/\s+/).filter(Boolean) ?? [];
-
-    const matched = await session.client.send("CSS.getMatchedStylesForNode", { nodeId: queryResult.nodeId }) as {
-      matchedCSSRules?: Array<{
-        rule: {
-          styleSheetId?: string;
-          selectorList?: { text?: string; range?: CdpSourceRange };
-          style?: { range?: CdpSourceRange; cssProperties?: CdpCssProperty[] };
-        };
-      }>;
-    };
-    const candidates = new Map<string, BrowserSourceResult["source"]>();
-    for (const match of matched.matchedCSSRules ?? []) {
-      const rule = match.rule;
-      if (!rule.styleSheetId || !ruleDeclaresAny(rule.style?.cssProperties ?? [], input.properties)) continue;
-      if (!await ruleMatchesCapturedValues(session.client, queryResult.nodeId, rule.style?.cssProperties ?? [], input)) continue;
-      const header = session.styleSheets.get(rule.styleSheetId);
-      if (!header) continue;
-      const range = rule.selectorList?.range ?? rule.style?.range;
-      if (!range) continue;
-      const source = await resolveCdpRuleSource(session, header, range);
-      if (!source && await isTailwindStyleSheet(session, header)) {
-        const utilityClass = utilityClassForSelector(rule.selectorList?.text ?? "", classNames);
-        const utilitySource = utilityClass ? await findUniqueClassSource(session.input.workspace, utilityClass) : undefined;
-        if (utilitySource) {
-          const candidate = { ...utilitySource, method: "utility-class" as const, confidence: "exact" as const };
-          candidates.set(`${candidate.file}:${candidate.line}:${utilityClass}`, candidate);
-          continue;
-        }
-      }
-      if (!source) continue;
-      const key = `${source.file}:${source.line}:${rule.selectorList?.text ?? ""}`;
-      candidates.set(key, source);
+    for (const page of session.pages.values()) {
+      const result = await resolveSourceInPage({ ...page, input: session.input, pageUrl: session.state.pageUrl }, input);
+      if (result.reason !== "target-not-found") return result;
     }
-
-    if (candidates.size === 1) return { source: [...candidates.values()][0], candidateCount: 1 };
-    if (candidates.size > 1) return { reason: "ambiguous", candidateCount: candidates.size };
-    const componentSource = await resolveComponentOwnerSource(session, queryResult.nodeId, input);
-    if (componentSource) return { source: componentSource, candidateCount: 1 };
-    return { reason: "source-unavailable", candidateCount: 0 };
+    return { reason: "target-not-found", candidateCount: 0 };
   }
 
   terminateAll(): void {
     for (const session of this.sessions.values()) {
-      session.client.close();
-      if (session.child.exitCode === null) session.child.kill();
+      clearInterval(session.discoveryTimer);
+      for (const page of session.pages.values()) page.client.close();
+      if (session.child?.exitCode === null) session.child.kill();
+      else if (!session.child && session.state.pid) void stopProcess(session.state.pid);
     }
     this.sessions.clear();
   }
 
   private async prepare(): Promise<void> {
-    this.preparePromise ??= cleanupStaleBrowserSessions(this.sessionsRoot, this.staleProfileAgeMs);
+    this.preparePromise ??= this.restorePersistedSessions();
     await this.preparePromise;
+  }
+
+  private async restorePersistedSessions(): Promise<void> {
+    await cleanupStaleBrowserSessions(this.sessionsRoot, this.staleProfileAgeMs);
+    const entries = await readdir(this.sessionsRoot, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const sessionRoot = join(this.sessionsRoot, entry.name);
+      let persisted: PersistedBrowserSession;
+      try {
+        persisted = JSON.parse(await readFile(join(sessionRoot, "session.json"), "utf8")) as PersistedBrowserSession;
+      } catch {
+        continue;
+      }
+      if (!persisted.pid || !isProcessRunning(persisted.pid) || !await debugEndpointOwnsSession(persisted)) continue;
+      const bridgeUrl = persisted.bridgeUrl ?? this.options.bridgeUrl;
+      if (!bridgeUrl) continue;
+      const input: BrowserSessionInput = {
+        sessionId: persisted.sessionId,
+        targetUrl: persisted.targetUrl,
+        bridgeUrl,
+        workspace: persisted.workspace,
+        conversationKey: persisted.conversationKey
+      };
+      const source = buildOverlayClient({
+        bridgeUrl,
+        workspace: input.workspace,
+        sessionId: input.sessionId,
+        targetOrigin: new URL(input.targetUrl).origin
+      });
+      let targets: CdpTarget[];
+      try {
+        const response = await fetch(`http://127.0.0.1:${persisted.debugPort}/json/list`, { signal: AbortSignal.timeout(1_000) });
+        if (!response.ok) continue;
+        targets = await response.json() as CdpTarget[];
+      } catch {
+        continue;
+      }
+      const pages = new Map<string, ActivePageSession>();
+      for (const target of targets) {
+        if (target.type !== "page" || !target.webSocketDebuggerUrl) continue;
+        try {
+          if (new URL(target.url).searchParams.get("domTuneSession") !== persisted.sessionId) continue;
+          pages.set(target.id, await attachPageTarget(target, source));
+        } catch {
+          // A page may close while the plugin runtime is reconnecting.
+        }
+      }
+      if (!pages.size) continue;
+      let discovering = false;
+      const discoveryTimer = setInterval(() => {
+        if (discovering) return;
+        discovering = true;
+        void discoverSessionPages(persisted.debugPort, persisted.sessionId, pages, source).finally(() => { discovering = false; });
+      }, 250);
+      discoveryTimer.unref();
+      this.sessions.set(persisted.sessionId, {
+        state: {
+          sessionId: persisted.sessionId,
+          browser: persisted.browser,
+          pid: persisted.pid,
+          debugPort: persisted.debugPort,
+          pageUrl: persisted.pageUrl,
+          workspace: persisted.workspace,
+          createdAt: persisted.createdAt,
+          conversationKey: persisted.conversationKey
+        },
+        sessionRoot,
+        input,
+        pages,
+        discoveryTimer
+      });
+    }
   }
 
   private async launchOnce(input: BrowserSessionInput, executable: string, sessionRoot: string, profileRoot: string, pageUrl: string): Promise<BrowserSession> {
@@ -305,7 +416,11 @@ export class ChromiumBrowserSessionLauncher implements BrowserSessionLauncher {
     const debugPort = await reserveLoopbackPort();
     const args = buildChromiumArgs({ debugPort, profileRoot, pageUrl });
     const child = this.spawnProcess(executable, args, {
-      detached: false,
+      // The Codex MCP stdio runtime can be recycled whenever an older tool UI is
+      // virtualized. Keep the controlled browser in its own process group so the
+      // next runtime can adopt it from session.json instead of closing the user's
+      // page together with the transient plugin process.
+      detached: true,
       stdio: "ignore",
       env: this.env
     });
@@ -316,47 +431,46 @@ export class ChromiumBrowserSessionLauncher implements BrowserSessionLauncher {
 
     try {
       const target = await waitForPageTarget(debugPort, pageUrl, this.timeoutMs, child, () => spawnError);
-      client = await CdpClient.connect(target.webSocketDebuggerUrl!);
-      const styleSheets = new Map<string, CdpStyleSheetHeader>();
-      const tailwindStyleSheets = new Map<string, boolean>();
-      client.on("CSS.styleSheetAdded", (params) => {
-        const header = (params as { header: CdpStyleSheetHeader }).header;
-        styleSheets.set(header.styleSheetId, header);
-      });
-      client.on("CSS.styleSheetRemoved", (params) => {
-        const styleSheetId = (params as { styleSheetId: string }).styleSheetId;
-        styleSheets.delete(styleSheetId);
-        tailwindStyleSheets.delete(styleSheetId);
-      });
       const source = buildOverlayClient({
         bridgeUrl: input.bridgeUrl,
         workspace: input.workspace,
         sessionId: input.sessionId,
         targetOrigin: new URL(input.targetUrl).origin
       });
-      await client.send("Page.enable");
-      await client.send("Runtime.enable");
-      await client.send("DOM.enable");
-      await client.send("CSS.enable");
-      await client.send("Page.addScriptToEvaluateOnNewDocument", { source });
-      const evaluation = await client.send("Runtime.evaluate", { expression: source, awaitPromise: true }) as { exceptionDetails?: { text?: string; exception?: { description?: string } } };
-      if (evaluation.exceptionDetails) {
-        throw new Error(`DOMTune overlay injection failed: ${evaluation.exceptionDetails.exception?.description ?? evaluation.exceptionDetails.text ?? "unknown page error"}`);
-      }
-      const state = { sessionId: input.sessionId, browser: browserName(executable), pid: child.pid, debugPort, pageUrl };
+      const primaryPage = await attachPageTarget(target, source);
+      client = primaryPage.client;
+      const createdAt = new Date().toISOString();
+      const state: BrowserSession = {
+        sessionId: input.sessionId,
+        browser: browserName(executable),
+        pid: child.pid,
+        debugPort,
+        pageUrl,
+        workspace: input.workspace,
+        createdAt,
+        conversationKey: input.conversationKey
+      };
       const persisted: PersistedBrowserSession = {
         ...state,
-        createdAt: new Date().toISOString(),
         targetUrl: input.targetUrl,
-        workspace: input.workspace
+        bridgeUrl: input.bridgeUrl
       };
       await writeFile(join(sessionRoot, "session.json"), JSON.stringify(persisted, null, 2), "utf8");
-      const active = { state, sessionRoot, child, client, input, styleSheets, tailwindStyleSheets };
+      const pages = new Map<string, ActivePageSession>([[target.id, primaryPage]]);
+      let discovering = false;
+      const discoveryTimer = setInterval(() => {
+        if (discovering) return;
+        discovering = true;
+        void discoverSessionPages(debugPort, input.sessionId, pages, source).finally(() => { discovering = false; });
+      }, 250);
+      discoveryTimer.unref();
+      const active = { state, sessionRoot, child, input, pages, discoveryTimer };
       this.sessions.set(input.sessionId, active);
       child.once("exit", () => {
         if (this.sessions.get(input.sessionId) !== active) return;
         this.sessions.delete(input.sessionId);
-        client?.close();
+        clearInterval(discoveryTimer);
+        for (const page of pages.values()) page.client.close();
         void removeSessionRoot(sessionRoot);
       });
       return state;
@@ -374,7 +488,55 @@ interface FrameworkOwnerHint {
   reactStacks?: string[];
 }
 
-async function resolveComponentOwnerSource(session: ActiveBrowserSession, nodeId: number, input: BrowserSourceRequest): Promise<BrowserSourceResult["source"] | undefined> {
+async function resolveSourceInPage(session: SourceBrowserSession, input: BrowserSourceRequest): Promise<BrowserSourceResult> {
+  const documentResult = await session.client.send("DOM.getDocument", { depth: 0, pierce: true }) as { root: { nodeId: number } };
+  const queryResult = await session.client.send("DOM.querySelector", {
+    nodeId: documentResult.root.nodeId,
+    selector: `[data-domtune-target="${input.targetToken}"]`
+  }) as { nodeId: number };
+  if (!queryResult.nodeId) return { reason: "target-not-found", candidateCount: 0 };
+
+  const described = await session.client.send("DOM.describeNode", { nodeId: queryResult.nodeId, depth: 0 }) as { node: { attributes?: string[] } };
+  const classNames = attributeValue(described.node.attributes ?? [], "class")?.split(/\s+/).filter(Boolean) ?? [];
+  const matched = await session.client.send("CSS.getMatchedStylesForNode", { nodeId: queryResult.nodeId }) as {
+    matchedCSSRules?: Array<{
+      rule: {
+        styleSheetId?: string;
+        selectorList?: { text?: string; range?: CdpSourceRange };
+        style?: { range?: CdpSourceRange; cssProperties?: CdpCssProperty[] };
+      };
+    }>;
+  };
+  const candidates = new Map<string, BrowserSourceResult["source"]>();
+  for (const match of matched.matchedCSSRules ?? []) {
+    const rule = match.rule;
+    if (!rule.styleSheetId || !ruleDeclaresAny(rule.style?.cssProperties ?? [], input.properties)) continue;
+    if (!await ruleMatchesCapturedValues(session.client, queryResult.nodeId, rule.style?.cssProperties ?? [], input)) continue;
+    const header = session.styleSheets.get(rule.styleSheetId);
+    if (!header) continue;
+    const range = rule.selectorList?.range ?? rule.style?.range;
+    if (!range) continue;
+    const resolved = await resolveCdpRuleSource(session, header, range);
+    if (!resolved && await isTailwindStyleSheet(session, header)) {
+      const utilityClass = utilityClassForSelector(rule.selectorList?.text ?? "", classNames);
+      const utilitySource = utilityClass ? await findUniqueClassSource(session.input.workspace, utilityClass) : undefined;
+      if (utilitySource) {
+        const candidate = { ...utilitySource, method: "utility-class" as const, confidence: "exact" as const };
+        candidates.set(`${candidate.file}:${candidate.line}:${utilityClass}`, candidate);
+        continue;
+      }
+    }
+    if (!resolved) continue;
+    candidates.set(`${resolved.file}:${resolved.line}:${rule.selectorList?.text ?? ""}`, resolved);
+  }
+  if (candidates.size === 1) return { source: [...candidates.values()][0], candidateCount: 1 };
+  if (candidates.size > 1) return { reason: "ambiguous", candidateCount: candidates.size };
+  const componentSource = await resolveComponentOwnerSource(session, queryResult.nodeId, input);
+  if (componentSource) return { source: componentSource, candidateCount: 1 };
+  return { reason: "source-unavailable", candidateCount: 0 };
+}
+
+async function resolveComponentOwnerSource(session: SourceBrowserSession, nodeId: number, input: BrowserSourceRequest): Promise<BrowserSourceResult["source"] | undefined> {
   try {
     const resolved = await session.client.send("DOM.resolveNode", { nodeId }) as { object?: { objectId?: string } };
     if (!resolved.object?.objectId) return undefined;
@@ -454,6 +616,7 @@ export interface StaticObjectTokenDeclaration extends StaticTokenDeclaration {
 
 export interface RelativeTokenImport {
   imported: string;
+  local?: string;
   specifier: string;
 }
 
@@ -621,14 +784,14 @@ export function findRelativeTokenImport(source: string, localName: string): Rela
       const parts = binding.trim().split(/\s+as\s+/);
       const imported = parts[0]?.trim();
       const local = (parts[1] ?? parts[0])?.trim();
-      if (imported && local === localName) matches.push({ imported, specifier: match[2] });
+      if (imported && local === localName) matches.push({ imported, local, specifier: match[2] });
     }
   }
   return matches.length === 1 ? matches[0] : undefined;
 }
 
 async function resolveComponentStyleSource(
-  session: ActiveBrowserSession,
+  session: SourceBrowserSession,
   nodeId: number,
   input: BrowserSourceRequest,
   componentFile: string
@@ -653,7 +816,14 @@ async function resolveComponentStyleSource(
           const token = await resolveStaticComponentToken(session.input.workspace, componentFile, source, declaration.value, property);
           if (!token) continue;
           value = token.value;
-          candidate = { file: token.file, line: token.line, method: "component-token", confidence: "exact" };
+          candidate = {
+            file: token.file,
+            line: token.line,
+            method: "component-token",
+            confidence: "exact",
+            usageCount: token.usageCount,
+            usageScope: token.usageScope
+          };
         }
         const propertyName = property === "font-size" || property === "background-color" ? property : undefined;
         const resolved = await session.client.send("CSS.resolveValues", {
@@ -677,13 +847,16 @@ async function resolveStaticComponentToken(
   componentSource: string,
   expression: string,
   property: string
-): Promise<{ file: string; line: number; value: string } | undefined> {
+): Promise<{ file: string; line: number; value: string; usageCount: number; usageScope: "single" | "shared" | "unknown" } | undefined> {
   const reference = expression.trim().split(".");
   if (reference.some((part) => !/^[A-Za-z_$][\w$]*$/.test(part))) return undefined;
   const [identifier, ...memberPath] = reference;
 
   const local = resolveStaticTokenInSource(componentSource, identifier, memberPath, property);
-  if (local) return { file: componentFile, ...local };
+  if (local) {
+    const usage = await analyzeComponentTokenUsage(workspace, componentFile, identifier, memberPath);
+    return { file: componentFile, ...local, ...usage };
+  }
   if (findStaticTokenDeclarations(componentSource, identifier).length > 0 || findStaticObjectTokenDeclarations(componentSource, identifier, memberPath).length > 0) return undefined;
 
   const imported = findRelativeTokenImport(componentSource, identifier);
@@ -700,12 +873,134 @@ async function resolveStaticComponentToken(
       if ((await stat(candidate)).size > 1_000_000) return undefined;
       const source = await readFile(candidate, "utf8");
       const token = resolveStaticTokenInSource(source, imported.imported, memberPath, property);
-      return token ? { file, ...token } : undefined;
+      if (!token) return undefined;
+      const usage = await analyzeComponentTokenUsage(workspace, file, imported.imported, memberPath);
+      return { file, ...token, ...usage };
     } catch {
       continue;
     }
   }
   return undefined;
+}
+
+export async function analyzeComponentTokenUsage(
+  workspace: string,
+  tokenFile: string,
+  exportedName: string,
+  memberPath: string[]
+): Promise<{ usageCount: number; usageScope: "single" | "shared" | "unknown" }> {
+  const tokenAbsolute = resolve(workspace, tokenFile);
+  let usageCount = 0;
+  let uncertain = false;
+  for (const absolute of await listWorkspaceSourceFiles(workspace)) {
+    let source: string;
+    try {
+      if ((await stat(absolute)).size > 1_000_000) continue;
+      source = await readFile(absolute, "utf8");
+    } catch {
+      continue;
+    }
+
+    if (resolve(absolute) === resolve(tokenAbsolute)) {
+      const directCount = countTokenReferences(source, exportedName, memberPath);
+      usageCount += directCount;
+      if (countTokenReferences(source, exportedName, []) > directCount) uncertain = true;
+    }
+    const imports = findAllRelativeTokenImports(source);
+    for (const imported of imports) {
+      const target = await resolveRelativeModule(dirname(absolute), imported.specifier);
+      if (!target || resolve(target) !== resolve(tokenAbsolute) || imported.imported !== exportedName || !imported.local) continue;
+      const directCount = countTokenReferences(source, imported.local, memberPath);
+      usageCount += directCount;
+      if (countTokenReferences(source, imported.local, []) > directCount) uncertain = true;
+    }
+
+    const riskySpecifiers = findRiskyRelativeSpecifiers(source);
+    for (const specifier of riskySpecifiers) {
+      const target = await resolveRelativeModule(dirname(absolute), specifier);
+      if (target && resolve(target) === resolve(tokenAbsolute)) uncertain = true;
+    }
+  }
+  return {
+    usageCount,
+    usageScope: usageCount > 1 ? "shared" : uncertain || usageCount === 0 ? "unknown" : "single"
+  };
+}
+
+function findAllRelativeTokenImports(source: string): RelativeTokenImport[] {
+  const imports: RelativeTokenImport[] = [];
+  const pattern = /import\s*{([^}]+)}\s*from\s*["'](\.[^"']*)["']/g;
+  for (let match = pattern.exec(source); match; match = pattern.exec(source)) {
+    for (const binding of match[1].split(",")) {
+      const parts = binding.trim().split(/\s+as\s+/);
+      const imported = parts[0]?.trim();
+      const local = (parts[1] ?? parts[0])?.trim();
+      if (imported && local && /^[A-Za-z_$][\w$]*$/.test(imported) && /^[A-Za-z_$][\w$]*$/.test(local)) {
+        imports.push({ imported, local, specifier: match[2] });
+      }
+    }
+  }
+  return imports;
+}
+
+function countTokenReferences(source: string, localName: string, memberPath: string[]): number {
+  const escaped = [localName, ...memberPath].map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s*\\.\\s*");
+  const pattern = new RegExp(`(^|[^\\w$])${escaped}(?![\\w$])`, "g");
+  const withoutImports = source.replace(/import\s*{[^}]+}\s*from\s*["'][^"']+["']\s*;?/g, "");
+  const withoutDeclaration = memberPath.length === 0
+    ? withoutImports.replace(new RegExp(`^\\s*(?:export\\s+)?const\\s+${localName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^\\n]*$`, "gm"), "")
+    : withoutImports;
+  let count = 0;
+  for (let match = pattern.exec(withoutDeclaration); match; match = pattern.exec(withoutDeclaration)) count += 1;
+  return count;
+}
+
+function findRiskyRelativeSpecifiers(source: string): string[] {
+  const specifiers: string[] = [];
+  const patterns = [
+    /import\s*\*\s*as\s*[A-Za-z_$][\w$]*\s*from\s*["'](\.[^"']*)["']/g,
+    /import\s+[A-Za-z_$][\w$]*\s+from\s*["'](\.[^"']*)["']/g,
+    /export\s*{[^}]+}\s*from\s*["'](\.[^"']*)["']/g,
+    /export\s*\*\s*from\s*["'](\.[^"']*)["']/g,
+    /import\s*\(\s*["'](\.[^"']*)["']\s*\)/g,
+    /require\s*\(\s*["'](\.[^"']*)["']\s*\)/g
+  ];
+  for (const pattern of patterns) for (let match = pattern.exec(source); match; match = pattern.exec(source)) specifiers.push(match[1]);
+  return specifiers;
+}
+
+async function resolveRelativeModule(directory: string, specifier: string): Promise<string | undefined> {
+  const importBase = resolve(directory, specifier);
+  const candidates = extname(importBase)
+    ? [importBase]
+    : [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"].flatMap((extension) => [`${importBase}${extension}`, join(importBase, `index${extension}`)]);
+  for (const candidate of candidates) {
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
+}
+
+async function listWorkspaceSourceFiles(workspace: string): Promise<string[]> {
+  const files: string[] = [];
+  async function visit(directory: string): Promise<void> {
+    let entries;
+    try { entries = await readdir(directory, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const absolute = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (!ignoredSourceDirectories.has(entry.name)) await visit(absolute);
+      } else if (entry.isFile() && sourceExtensions.has(extname(entry.name))) {
+        files.push(absolute);
+      }
+    }
+  }
+  await visit(workspace);
+  return files;
 }
 
 function resolveStaticTokenInSource(source: string, identifier: string, memberPath: string[], property: string): { line: number; value: string } | undefined {
@@ -717,11 +1012,11 @@ function resolveStaticTokenInSource(source: string, identifier: string, memberPa
   return value ? { line: declarations[0].line, value } : undefined;
 }
 
-async function resolveReactStackSource(session: ActiveBrowserSession, stack: string): Promise<BrowserSourceResult["source"] | undefined> {
+async function resolveReactStackSource(session: SourceBrowserSession, stack: string): Promise<BrowserSourceResult["source"] | undefined> {
   for (const frame of parseReactStackFrames(stack)) {
     let url: URL;
     try { url = new URL(frame.url); } catch { continue; }
-    if (url.origin !== new URL(session.state.pageUrl).origin || url.pathname.includes("node_modules") || url.pathname.startsWith("/@")) continue;
+    if (url.origin !== new URL(session.pageUrl).origin || url.pathname.includes("node_modules") || url.pathname.startsWith("/@")) continue;
     try {
       const response = await fetch(url);
       if (!response.ok) continue;
@@ -785,7 +1080,7 @@ export function normalizeCssValue(value: string): string {
   return value.trim().toLowerCase().replace(/\s*!important\s*$/, "").replace(/\s+/g, " ").replace(/\s*,\s*/g, ", ");
 }
 
-async function isTailwindStyleSheet(session: ActiveBrowserSession, header: CdpStyleSheetHeader): Promise<boolean> {
+async function isTailwindStyleSheet(session: SourceBrowserSession, header: CdpStyleSheetHeader): Promise<boolean> {
   const cached = session.tailwindStyleSheets.get(header.styleSheetId);
   if (cached !== undefined) return cached;
   const ownerFile = await styleSheetOwnerFile(session.client, header);
@@ -876,9 +1171,9 @@ function ruleDeclaresAny(properties: CdpCssProperty[], requested: string[]): boo
   });
 }
 
-async function resolveCdpRuleSource(session: ActiveBrowserSession, header: CdpStyleSheetHeader, range: CdpSourceRange): Promise<BrowserSourceResult["source"] | undefined> {
+async function resolveCdpRuleSource(session: SourceBrowserSession, header: CdpStyleSheetHeader, range: CdpSourceRange): Promise<BrowserSourceResult["source"] | undefined> {
   if (header.sourceMapURL) {
-    const rawMap = await loadSourceMap(header.sourceMapURL, header.sourceURL || session.state.pageUrl);
+    const rawMap = await loadSourceMap(header.sourceMapURL, header.sourceURL || session.pageUrl);
     if (rawMap) {
       const source = resolveSourceMapPosition(rawMap, {
         line: range.startLine + 1,
@@ -1027,10 +1322,7 @@ export async function cleanupStaleBrowserSessions(sessionsRoot: string, stalePro
     }
 
     if (persisted?.pid && isProcessRunning(persisted.pid)) {
-      if (await debugEndpointOwnsSession(persisted)) {
-        await stopProcess(persisted.pid);
-        await removeSessionRoot(sessionRoot);
-      }
+      if (!await debugEndpointOwnsSession(persisted)) await removeSessionRoot(sessionRoot);
       return;
     }
 

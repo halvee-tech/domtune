@@ -1,16 +1,10 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createDomTuneMcp } from "./mcp.js";
-import { baseUrl, browserLauncher, startDomTuneWebServer, store } from "./server.js";
+import { baseUrl, browserController, startDomTuneWebServer, store } from "./server.js";
 
 async function main(): Promise<void> {
   startDomTuneWebServer((message) => console.error(message));
-  process.once("exit", () => browserLauncher.terminateAll());
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.once(signal, () => {
-      void browserLauncher.closeAll().finally(() => process.exit(0));
-    });
-  }
-  const server = createDomTuneMcp(store, baseUrl, browserLauncher);
+  const server = createDomTuneMcp(store, baseUrl, browserController);
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

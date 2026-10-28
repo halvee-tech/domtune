@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { access, mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { assertTargetReachable, buildChromiumArgs, chromiumCandidates, cleanupStaleBrowserSessions, cssEscapeIdentifier, findComponentStyleDeclarations, findRelativeTokenImport, findStaticObjectTokenDeclarations, findStaticTokenDeclarations, findUniqueClassSource, isLocalDevelopmentUrl, literalCssValue, normalizeCssValue, parseReactStackFrames, resolveSourceMapPosition, validateBrowserSessionInput } from "../src/index.js";
+import { analyzeComponentTokenUsage, assertTargetReachable, buildChromiumArgs, chromiumCandidates, cleanupStaleBrowserSessions, cssEscapeIdentifier, findComponentStyleDeclarations, findRelativeTokenImport, findStaticObjectTokenDeclarations, findStaticTokenDeclarations, findUniqueClassSource, isLocalDevelopmentUrl, literalCssValue, normalizeCssValue, parseReactStackFrames, resolveSourceMapPosition, validateBrowserSessionInput } from "../src/index.js";
 
 test("recognizes loopback development targets", () => {
   assert.equal(isLocalDevelopmentUrl(new URL("http://127.0.0.1:4174/")), true);
@@ -140,7 +141,7 @@ test("resolves only unique const tokens, static object paths, and relative named
     "let mutableRadius = 30;"
   ].join("\n");
 
-  assert.deepEqual(findRelativeTokenImport(source, "radius"), { imported: "cardRadius", specifier: "./theme" });
+  assert.deepEqual(findRelativeTokenImport(source, "radius"), { imported: "cardRadius", local: "radius", specifier: "./theme" });
   assert.equal(findRelativeTokenImport(source, "cardRadius"), undefined);
   assert.deepEqual(findStaticTokenDeclarations(source, "localRadius"), [{ line: 2, value: "24" }]);
   assert.deepEqual(findStaticTokenDeclarations(source, "mutableRadius"), []);
@@ -161,6 +162,29 @@ test("resolves only unique const tokens, static object paths, and relative named
   ]);
   assert.deepEqual(findStaticObjectTokenDeclarations("const theme = {\n  ...base\n};", "theme", ["card", "radius"]), []);
   assert.deepEqual(findStaticObjectTokenDeclarations(objectSource, "theme", ["card", "missing"]), []);
+});
+
+test("classifies statically provable token usage scope", async () => {
+  const root = await mkdtemp(join(tmpdir(), "domtune-token-usage-"));
+  await mkdir(join(root, "src"), { recursive: true });
+  await writeFile(join(root, "src", "theme.ts"), "export const theme = {\n  card: {\n    radius: 26\n  }\n};\n");
+  await writeFile(join(root, "src", "Card.tsx"), "import { theme } from './theme';\nexport const card = { borderRadius: theme.card.radius };\n");
+
+  assert.deepEqual(await analyzeComponentTokenUsage(root, "src/theme.ts", "theme", ["card", "radius"]), {
+    usageCount: 1,
+    usageScope: "single"
+  });
+  await writeFile(join(root, "src", "Uncertain.tsx"), "import * as tokens from './theme';\nexport const uncertain = tokens.theme;\n");
+  assert.deepEqual(await analyzeComponentTokenUsage(root, "src/theme.ts", "theme", ["card", "radius"]), {
+    usageCount: 1,
+    usageScope: "unknown"
+  });
+  await writeFile(join(root, "src", "Other.tsx"), "import { theme as tokens } from './theme';\nexport const other = { borderRadius: tokens.card.radius };\n");
+  assert.deepEqual(await analyzeComponentTokenUsage(root, "src/theme.ts", "theme", ["card", "radius"]), {
+    usageCount: 2,
+    usageScope: "shared"
+  });
+  await rm(root, { recursive: true, force: true });
 });
 
 test("finds only a unique static utility class occurrence", async () => {
@@ -207,5 +231,35 @@ test("cleans dead sessions and expired incomplete profiles", async () => {
   await cleanupStaleBrowserSessions(root, 100, Date.now());
   await assert.rejects(access(deadRoot));
   await assert.rejects(access(incompleteRoot));
+  await rm(root, { recursive: true, force: true });
+});
+
+test("preserves a live controlled browser session for runtime adoption", async () => {
+  const root = await mkdtemp(join(tmpdir(), "domtune-browser-live-"));
+  const sessionRoot = join(root, "dt_live");
+  const sessionFile = join(sessionRoot, "session.json");
+  await mkdir(sessionRoot, { recursive: true });
+  const server = createHttpServer((_request, response) => {
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify([{ id: "page-live", type: "page", url: "http://127.0.0.1:4174/?domTuneSession=dt_live" }]));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  await writeFile(sessionFile, JSON.stringify({
+    sessionId: "dt_live",
+    browser: "Chromium",
+    pid: process.pid,
+    debugPort: address.port,
+    pageUrl: "http://127.0.0.1:4174/?domTuneSession=dt_live",
+    createdAt: new Date().toISOString(),
+    targetUrl: "http://127.0.0.1:4174/",
+    workspace: "/workspace",
+    bridgeUrl: "http://127.0.0.1:47822"
+  }));
+
+  await cleanupStaleBrowserSessions(root, 100, Date.now());
+  await access(sessionFile);
+  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   await rm(root, { recursive: true, force: true });
 });

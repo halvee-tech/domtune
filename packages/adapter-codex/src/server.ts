@@ -7,8 +7,10 @@ import { z } from "zod";
 import { newChangeSetSchema } from "@domtune/core";
 import { ChangeSetStore } from "@domtune/transport";
 import { ChromiumBrowserSessionLauncher } from "@domtune/browser";
-import { createDomTuneMcp } from "./mcp.js";
-import { buildDemoHtml, buildPanelHtml } from "./ui.js";
+import { createDomTuneMcp, type BrowserSessionController } from "./mcp.js";
+import { buildSessionPanelHtml } from "./session-panel.js";
+import { SessionBridgeStatus } from "./bridge-status.js";
+import { buildDemoHtml } from "./ui.js";
 
 export const port = Number(process.env.DOMTUNE_PORT ?? 47822);
 export const host = "127.0.0.1";
@@ -16,7 +18,9 @@ export const baseUrl = `http://${host}:${port}`;
 export const projectRoot = resolve(process.env.DOMTUNE_ROOT ?? process.cwd());
 export const dataRoot = resolve(process.env.PLUGIN_DATA ?? projectRoot);
 export const store = new ChangeSetStore(resolve(dataRoot, ".domtune/change-sets.json"));
-export const browserLauncher = new ChromiumBrowserSessionLauncher({ dataRoot });
+export const browserLauncher = new ChromiumBrowserSessionLauncher({ dataRoot, bridgeUrl: baseUrl });
+export const browserController = createHttpBrowserSessionController(baseUrl);
+export const sessionBridgeStatus = new SessionBridgeStatus();
 const app = createMcpExpressApp({ host });
 const browserSourceRequestSchema = z.object({
   sessionId: z.string().min(1),
@@ -49,7 +53,7 @@ app.get("/demo.css", async (_req: Request, res: Response) => {
 });
 
 app.get("/panel-preview", (_req: Request, res: Response) => {
-  res.type("html").send(buildPanelHtml(baseUrl));
+  res.type("html").send(buildSessionPanelHtml(baseUrl));
 });
 
 app.get("/api/change-sets", async (req: Request, res: Response) => {
@@ -60,7 +64,15 @@ app.get("/api/change-sets", async (req: Request, res: Response) => {
 app.get("/api/change-sets/:id", async (req: Request, res: Response) => {
   const item = await store.get(String(req.params.id));
   if (!item) return res.status(404).json({ error: "ChangeSet not found" });
-  res.json(item);
+  res.json({ ...item, delivery: sessionBridgeStatus.get(item.sessionId) });
+});
+
+app.post("/api/session-bridges/:sessionId/heartbeat", (req: Request, res: Response) => {
+  res.json(sessionBridgeStatus.touch(String(req.params.sessionId)));
+});
+
+app.get("/api/session-bridges/:sessionId", (req: Request, res: Response) => {
+  res.json(sessionBridgeStatus.get(String(req.params.sessionId)));
 });
 
 app.post("/api/change-sets", async (req: Request, res: Response) => {
@@ -78,8 +90,25 @@ app.post("/api/source-map", async (req: Request, res: Response) => {
   res.json(result);
 });
 
+app.post("/api/browser-sessions", async (req: Request, res: Response) => {
+  try {
+    const session = await browserLauncher.open(req.body);
+    res.status(201).json(session);
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.get("/api/browser-sessions", async (_req: Request, res: Response) => {
+  res.json(await browserLauncher.list());
+});
+
+app.delete("/api/browser-sessions/:sessionId", async (req: Request, res: Response) => {
+  res.json({ closed: await browserLauncher.close(String(req.params.sessionId)) });
+});
+
 app.post("/mcp", async (req: Request, res: Response) => {
-  const server = createDomTuneMcp(store, baseUrl, browserLauncher);
+  const server = createDomTuneMcp(store, baseUrl, browserController);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   try {
     await server.connect(transport);
@@ -121,5 +150,36 @@ export function startDomTuneWebServer(log: (message: string) => void = console.l
   });
 
   return listener;
+}
+
+function createHttpBrowserSessionController(url: string): BrowserSessionController {
+  const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      try {
+        const response = await fetch(`${url}${path}`, init);
+        const payload = await response.json() as T & { error?: string };
+        if (!response.ok) throw new Error(payload.error ?? `DOMTune browser service returned ${response.status}.`);
+        return payload;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 19) await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+      }
+    }
+    throw lastError;
+  };
+
+  return {
+    open: (input) => request("/api/browser-sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input)
+    }),
+    list: () => request("/api/browser-sessions"),
+    close: async (sessionId) => {
+      const result = await request<{ closed: boolean }>(`/api/browser-sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+      return result.closed;
+    }
+  };
 }
 

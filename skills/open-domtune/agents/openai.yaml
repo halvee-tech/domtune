@@ -1,0 +1,6 @@
+interface:
+  display_name: "Open DOMTune"
+  short_description: "Visually tune a running local frontend"
+  default_prompt: "Use $open-domtune to visually adjust the current frontend page."
+policy:
+  allow_implicit_invocation: true
